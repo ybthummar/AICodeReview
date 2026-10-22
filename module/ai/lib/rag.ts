@@ -5,14 +5,18 @@ import { parseWithASTService } from "@/module/ast/client";
 import type { PineconeRecord } from "@pinecone-database/pinecone";
 import type { CodeMetadata } from "@/types/ast/type";
 
-export async function generateEmbedding(text: string) {
-  const { embedding } = await embed({
-    model: google.textEmbeddingModel("gemini-embedding-001"),
-    value: text,
-    // value: query,
-  });
+export async function generateEmbedding(text: string): Promise<number[]> {
+  try {
+    const { embedding } = await embed({
+      model: google.textEmbeddingModel("gemini-embedding-001"),
+      value: text,
+    });
 
-  return embedding;
+    return embedding;
+  } catch (error) {
+    console.error("Failed to generate embedding:", error);
+    throw error;
+  }
 }
 
 export async function indexCodebase(
@@ -22,8 +26,8 @@ export async function indexCodebase(
   const vectors: PineconeRecord<CodeMetadata>[] = [];
 
   for (const file of files) {
-    const ext = file.path.split(".").pop();
-    if (!ext || !["js", "ts", "jsx", "tsx"].includes(ext)) {
+    const ext = file.path.split(".").pop()?.toLowerCase();
+    if (!ext || !["js", "ts", "jsx", "tsx", "py", "go", "java"].includes(ext)) {
       continue;
     }
 
@@ -35,17 +39,14 @@ export async function indexCodebase(
       endLine: number;
     }[] = [];
 
-    console.log("Start indexing");
-
     try {
       const result = await parseWithASTService(file.content, ext);
-      symbols = result.symbols;
+      symbols = result.symbols || [];
     } catch (error) {
-      console.error("AST service failed for:", file.path, error);
+      console.warn("AST service failed for:", file.path, error);
     }
 
-    console.log("Stop Index :", symbols.length);
-
+    // If no symbols were extracted, embed the truncated file content
     if (symbols.length === 0) {
       const content = `File: ${file.path}\n\n${file.content}`;
       const truncatedContent = content.slice(0, 8000);
@@ -64,34 +65,49 @@ export async function indexCodebase(
           },
         });
       } catch (error) {
-        console.error(`Files to embed ${file.path}:`, error);
+        console.error(`Failed to embed file ${file.path}:`, error);
       }
     }
 
+    // Embed each extracted symbol
     for (const symbol of symbols) {
-      const embedding = await generateEmbedding(symbol.code.slice(0, 2000));
+      try {
+        const embedding = await generateEmbedding(symbol.code.slice(0, 2000));
 
-      vectors.push({
-        id: `${repoId}-${file.path.replace(/\//g, "_")}-${symbol.name}`,
-        values: embedding,
-        metadata: {
-          repoId,
-          path: file.path,
-          type: "symbol",
-          symbolName: symbol.name,
-          symbolType: symbol.type,
-          startLine: symbol.startLine,
-          endLine: symbol.endLine,
-        },
-      });
+        vectors.push({
+          id: `${repoId}-${file.path.replace(/\//g, "_")}-${symbol.name}`,
+          values: embedding,
+          metadata: {
+            repoId,
+            path: file.path,
+            type: "symbol",
+            symbolName: symbol.name,
+            symbolType: symbol.type,
+            startLine: symbol.startLine,
+            endLine: symbol.endLine,
+          },
+        });
+      } catch (error) {
+        console.error(`Failed to embed symbol ${symbol.name} in ${file.path}:`, error);
+      }
     }
+  }
+
+  if (vectors.length === 0) {
+    console.log(`No vectors generated for repository ${repoId}`);
+    return;
   }
 
   const batchSize = 100;
 
   for (let i = 0; i < vectors.length; i += batchSize) {
     const batch = vectors.slice(i, i + batchSize);
-    await pineconeIndex.upsert(batch);
+    try {
+      await pineconeIndex.upsert(batch);
+      console.log(`Upserted batch of ${batch.length} vectors to Pinecone for ${repoId}`);
+    } catch (error) {
+      console.error(`Failed to upsert batch to Pinecone:`, error);
+    }
   }
 }
 
@@ -100,14 +116,30 @@ export async function retrieveContext(
   repoId: string,
   topK: number = 10
 ) {
-  const embedding = await generateEmbedding(query);
+  try {
+    const embedding = await generateEmbedding(query);
 
-  const results = await pineconeIndex.query({
-    vector: embedding,
-    filter: { repoId, type: "symbol" },
-    topK,
-    includeMetadata: true,
-  });
+    // First try querying for symbols
+    let results = await pineconeIndex.query({
+      vector: embedding,
+      filter: { repoId, type: "symbol" },
+      topK,
+      includeMetadata: true,
+    });
 
-  return results.matches.map((match) => match.metadata).filter(Boolean);
+    // If no symbols found, query for any relevant files/chunks in this repo
+    if (!results.matches || results.matches.length === 0) {
+      results = await pineconeIndex.query({
+        vector: embedding,
+        filter: { repoId },
+        topK,
+        includeMetadata: true,
+      });
+    }
+
+    return results.matches.map((match) => match.metadata).filter(Boolean);
+  } catch (error) {
+    console.warn(`Vector search failed for repo ${repoId}:`, error);
+    return [];
+  }
 }

@@ -64,7 +64,10 @@ export async function getDashboardStats() {
 
     const { data: user } = await octokit.rest.users.getAuthenticated();
 
-    const totalRepos = await prisma.repository.count();
+    // Count only the current user's repositories
+    const totalRepos = await prisma.repository.count({
+      where: { userId: session.user.id },
+    });
 
     const calendar = await fetchUserContribution(token, user.login);
     const totalCommits = calendar?.totalContributions || 0;
@@ -76,13 +79,20 @@ export async function getDashboardStats() {
 
     const totalPRs = prs.total_count || 0;
 
-    const totalReviews = await prisma.review.count();
+    // Count only reviews for the current user's repositories
+    const totalReviews = await prisma.review.count({
+      where: {
+        repository: {
+          userId: session.user.id,
+        },
+      },
+    });
 
     const subscriptionType = await prisma.user.findFirst({
       where: {
-        email: session?.user?.email
-      }
-    })
+        id: session.user.id,
+      },
+    });
 
     return { totalCommits, totalPRs, totalReviews, totalRepos, subscriptionType };
   } catch (error) {
@@ -157,24 +167,22 @@ export async function getMonthlyActivity() {
     });
 
     const sixMonthAgo = new Date();
-
     sixMonthAgo.setMonth(sixMonthAgo.getMonth() - 6);
 
-    const generateSampleReviews = () => {
-      const sampleReviews = [];
-      const now = new Date();
-
-      for (let i = 0; i < 45; i++) {
-        const randomDaysAgo = Math.floor(Math.random() * 180);
-        const reviewDate = new Date(now);
-        reviewDate.setDate(reviewDate.getDate() - randomDaysAgo);
-        sampleReviews.push({ createdAt: reviewDate });
-      }
-
-      return sampleReviews;
-    };
-
-    const reviews = generateSampleReviews();
+    // Fetch REAL reviews from the database instead of fake sample data
+    const reviews = await prisma.review.findMany({
+      where: {
+        repository: {
+          userId: session.user.id,
+        },
+        createdAt: {
+          gte: sixMonthAgo,
+        },
+      },
+      select: {
+        createdAt: true,
+      },
+    });
 
     reviews.forEach((review) => {
       const monthKey = monthNames[review.createdAt.getMonth()];

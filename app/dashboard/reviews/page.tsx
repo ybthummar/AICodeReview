@@ -85,7 +85,12 @@ const ReviewCard: React.FC<ReviewCardProps> = ({ review }) => {
             <Badge
               className={`font-semibold bg-white text-blue-500 border-blue-500 hover:text-blue-600 hover:border-blue-600`}
             >
-              <a href={review.prUrl} className="flex gap-x-2" target="_blanck">
+              <a
+                href={review.prUrl}
+                className="flex gap-x-2"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
                 <ExternalLink className="w-4 h-4 mr-1" />
                 Visit PR
               </a>

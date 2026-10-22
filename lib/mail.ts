@@ -4,7 +4,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 interface SendMailOptions {
   to: string;
-  cc: string;
+  cc?: string;
   subject: string;
   html: string;
   from?: string;
@@ -18,13 +18,16 @@ export async function sendMail({
   cc,
 }: SendMailOptions) { 
   try {
-    const emailPayload = {
+    const emailPayload: any = {
       from,
       to,
       subject,
       html,
-      cc
     };
+
+    if (cc) {
+      emailPayload.cc = cc;
+    }
 
     const data = await resend.emails.send(emailPayload);
     return { success: true, data };

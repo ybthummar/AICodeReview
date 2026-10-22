@@ -5,6 +5,8 @@ import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
 import { createWebhook, getRepositories } from "@/module/github/lib/github";
 import { inngest } from "@/inngest/client";
+import { performDirectRepoIndex } from "@/inngest/functions";
+import { revalidatePath } from "next/cache";
 
 export const fetchRepositories = async (
   page: number = 1,
@@ -50,8 +52,18 @@ export const connectRepository = async (
   const webhook = await createWebhook(owner, repo);
 
   if (webhook) {
-    await prisma.repository.create({
-      data: {
+    await prisma.repository.upsert({
+      where: {
+        githubId: BigInt(githubId),
+      },
+      update: {
+        name: repo,
+        owner,
+        fullName: `${owner}/${repo}`,
+        url: `https://github.com/${owner}/${repo}`,
+        userId: session.user.id,
+      },
+      create: {
         githubId: BigInt(githubId),
         name: repo,
         owner,
@@ -62,18 +74,37 @@ export const connectRepository = async (
     });
   }
 
-  try {
-    await inngest.send({
-      name: "repository.connected",
-      data: {
-        owner,
-        repo,
-        userId: session.user.id,
-      },
-    });
-  } catch (error) {
-    console.error("Failed to trigger repository indexing", error);
+  // Trigger indexing for RAG: try Inngest first, fall back to direct execution
+  let queuedWithInngest = false;
+  if (process.env.INNGEST_EVENT_KEY) {
+    try {
+      await inngest.send({
+        name: "repository.connected",
+        data: {
+          owner,
+          repo,
+          userId: session.user.id,
+        },
+      });
+      queuedWithInngest = true;
+    } catch (error) {
+      console.warn("Failed to trigger repository indexing via Inngest:", error);
+    }
   }
+
+  if (!queuedWithInngest) {
+    // Run direct indexing in background
+    performDirectRepoIndex({
+      owner,
+      repo,
+      userId: session.user.id,
+    }).catch((err) => {
+      console.error("Direct repository indexing error:", err);
+    });
+  }
+
+  revalidatePath("/dashboard/repositories", "page");
+  revalidatePath("/dashboard/settings", "page");
 
   return webhook;
 };

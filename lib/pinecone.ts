@@ -1,7 +1,17 @@
 import { Pinecone } from "@pinecone-database/pinecone";
 
+const apiKey = process.env.PINECOIN_DB_API_KEY || process.env.PINECONE_API_KEY;
+
+if (!apiKey) {
+  console.warn(
+    "⚠️  PINECOIN_DB_API_KEY is not set. Pinecone vector search will fail."
+  );
+}
+
 export const pinecone = new Pinecone({
-  apiKey: process.env.PINECOIN_DB_API_KEY!,
+  apiKey: apiKey || "missing-key",
 });
 
-export const pineconeIndex = pinecone.index("RepoPilot-v2");
+const indexName = (process.env.PINECONE_INDEX || "repopilot-v2").toLowerCase();
+
+export const pineconeIndex = pinecone.index(indexName);

@@ -151,14 +151,13 @@ Output JSON format:
 `;
 
     const { text } = await generateText({
-      model: google("gemini-2.5-flash"),
+      model: google("gemini-flash-latest"),
       temperature: 0.3,
       prompt,
     });
 
     let parsed;
     try {
-      // Remove potential markdown code blocks
       const cleanedText = text.replace(/```json\n?|\n?```/g, "").trim();
       parsed = JSON.parse(cleanedText);
     } catch {
