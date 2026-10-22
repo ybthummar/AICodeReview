@@ -237,6 +237,26 @@ Respond in clean, professional GitHub Markdown.
       },
     });
 
+    // Notify user via email
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { email: true },
+      });
+      if (user?.email) {
+        const { sendReviewNotificationEmail } = await import("@/lib/mail");
+        await sendReviewNotificationEmail({
+          to: user.email,
+          repoName: `${owner}/${repo}`,
+          prNumber,
+          prTitle: title,
+          reviewSnippet: review,
+        });
+      }
+    } catch (mailErr) {
+      console.warn("Review notification email skipped:", mailErr);
+    }
+
     return { success: true, review };
   } catch (error) {
     console.error(

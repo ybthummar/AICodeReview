@@ -151,7 +151,7 @@ Output JSON format:
 `;
 
     const { text } = await generateText({
-      model: google("gemini-3.5-flash"),
+      model: google("gemini-flash-lite-latest"),
       temperature: 0.3,
       prompt,
     });
@@ -238,26 +238,35 @@ export async function sendEmail(repositoryId: string) {
         },
       });
 
-      if (repo && repo.repositoryClients.length > 0) {
-        const aiSummary = await generateRepoSummary(repo);
-        const { sendMail, wrapEmailTemplate } = await import("@/lib/mail");
-        const emailHtml = wrapEmailTemplate(aiSummary.html, repo.name);
+      if (!repo) {
+        throw new Error("Repository not found or access denied.");
+      }
 
-        for (const rc of repo.repositoryClients) {
-          try {
-            await sendMail({
-              to: rc.client.email,
-              subject: `Weekly Update - ${repo.name}`,
-              html: emailHtml,
-              cc: session.user.email,
-            });
-            await prisma.repositoryClient.update({
-              where: { id: rc.id },
-              data: { deliveredAt: new Date() },
-            });
-          } catch (mailErr) {
-            console.error(`Failed to send email to ${rc.client.email}:`, mailErr);
-          }
+      if (repo.repositoryClients.length === 0) {
+        throw new Error("No clients mapped to this repository. Please map a client to this repository before sending the report.");
+      }
+
+      const aiSummary = await generateRepoSummary(repo);
+      const { sendMail, wrapEmailTemplate } = await import("@/lib/mail");
+      const emailHtml = wrapEmailTemplate(aiSummary.html, repo.name);
+
+      let sentCount = 0;
+      for (const rc of repo.repositoryClients) {
+        try {
+          await sendMail({
+            to: rc.client.email,
+            subject: `Weekly Update - ${repo.name}`,
+            html: emailHtml,
+            cc: session.user.email,
+          });
+          await prisma.repositoryClient.update({
+            where: { id: rc.id },
+            data: { deliveredAt: new Date() },
+          });
+          sentCount++;
+        } catch (mailErr) {
+          console.error(`Failed to send email to ${rc.client.email}:`, mailErr);
+          throw mailErr;
         }
       }
     }

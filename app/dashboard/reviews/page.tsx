@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { useSession } from "@/lib/auth-client";
+import { isAdminUser } from "@/lib/admin";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -318,6 +320,9 @@ const ReviewCard: React.FC<ReviewCardProps> = ({ review }) => {
 
 export default function ReviewPage() {
   const queryClient = useQueryClient();
+  const { data: session } = useSession();
+  const isAdmin = isAdminUser(session?.user);
+  const [adminScope, setAdminScope] = useState<"mine" | "all">("mine");
   const [activeTab, setActiveTab] = useState<"prs" | "reports">("prs");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedRepoFilter, setSelectedRepoFilter] = useState<string>("all");
@@ -332,30 +337,30 @@ export default function ReviewPage() {
   // Per-PR review loading state
   const [runningPRId, setRunningPRId] = useState<string | null>(null);
 
-  // 1. Fetch live Pull Requests from connected repositories
+  // 1. Fetch live Pull Requests from connected repositories (strictly user-wise by default)
   const {
     data: pullRequests,
     isLoading: isLoadingPRs,
     refetch: refetchPRs,
     isRefetching: isRefetchingPRs,
   } = useQuery<ConnectedRepoPR[]>({
-    queryKey: ["connected-repos-prs"],
+    queryKey: ["connected-repos-prs", adminScope],
     queryFn: async () => {
-      return await getConnectedReposPullRequests();
+      return await getConnectedReposPullRequests(adminScope);
     },
     staleTime: 1000 * 30, // 30s
   });
 
-  // 2. Fetch completed/pending review reports from database
+  // 2. Fetch completed/pending review reports from database (strictly user-wise by default)
   const {
     data: reviews,
     isLoading: isLoadingReviews,
     refetch: refetchReviews,
     isRefetching: isRefetchingReviews,
   } = useQuery<Review[] | null>({
-    queryKey: ["reviews"],
+    queryKey: ["reviews", adminScope],
     queryFn: async () => {
-      return await getReviews("all");
+      return await getReviews(adminScope);
     },
     refetchInterval: (query) => {
       const data = query.state.data;
@@ -665,6 +670,7 @@ export default function ReviewPage() {
 
       {/* Tabs & Filters Bar */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 pb-4 border-b border-slate-200">
+        <div className="flex items-center gap-3 flex-wrap">
         {/* Navigation Pills */}
         <div className="flex items-center gap-2 p-1 bg-slate-200/70 rounded-xl w-fit">
           <button
@@ -713,6 +719,33 @@ export default function ReviewPage() {
               {reviewList.length}
             </Badge>
           </button>
+        </div>
+
+        {/* Admin User-Wise vs All-Repositories Scope Toggle */}
+        {isAdmin && (
+          <div className="flex items-center gap-1 bg-slate-200/70 p-1 rounded-xl text-xs font-semibold">
+            <button
+              onClick={() => setAdminScope("mine")}
+              className={`px-3 py-1.5 rounded-lg transition-all ${
+                adminScope === "mine"
+                  ? "bg-white text-blue-600 shadow-sm"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              My Reviews
+            </button>
+            <button
+              onClick={() => setAdminScope("all")}
+              className={`px-3 py-1.5 rounded-lg transition-all ${
+                adminScope === "all"
+                  ? "bg-purple-600 text-white shadow-sm"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              All Workspace Reviews (Admin)
+            </button>
+          </div>
+        )}
         </div>
 
         {/* Search & Repository Filter */}
