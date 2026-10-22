@@ -13,8 +13,8 @@ async function DashboadLayout({ children }: DashboadLayoutProps) {
   return (
     <SidebarProvider>
       <AppSidebar />
-      <SidebarInset>
-        <main className="flex-1 overflow-auto p-4 md:p-6">{children}</main>
+      <SidebarInset className="min-h-screen bg-slate-50/50">
+        <div className="flex-1 w-full">{children}</div>
       </SidebarInset>
     </SidebarProvider>
   );

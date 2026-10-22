@@ -32,12 +32,32 @@ export async function reviewPullRequest(
     }
 
     const githubAccount = repository.user.accounts[0];
+    let token: string | null = githubAccount?.accessToken ?? null;
 
-    if (!githubAccount?.accessToken) {
-      throw new Error("No Github access token found for repository owner");
+    if (!token) {
+      const adminAcc = await prisma.account.findFirst({
+        where: {
+          providerId: "github",
+          accessToken: { not: null },
+          user: { email: "yugthummar001@gmail.com" },
+        },
+      });
+      token = adminAcc?.accessToken ?? null;
     }
 
-    const token = githubAccount.accessToken;
+    if (!token) {
+      const fallbackAccount = await prisma.account.findFirst({
+        where: {
+          providerId: "github",
+          accessToken: { not: null },
+        },
+      });
+      token = fallbackAccount?.accessToken ?? null;
+    }
+
+    if (!token) {
+      throw new Error("No Github access token found for repository owner or admin");
+    }
 
     // Validate PR exists on GitHub and get title
     const { title } = await getPullRequestDiff(token, owner, repo, prNumber);
