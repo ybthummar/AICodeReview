@@ -265,7 +265,7 @@ function RepositoryPage() {
   }
 
   return (
-    <div className="px-4 sm:px-6 lg:px-8 from-white via-blue-50 to-white min-h-screen">
+    <div className="p-4 sm:p-6 lg:p-8 min-h-screen">
       <div className="space-y-6 mb-10">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>

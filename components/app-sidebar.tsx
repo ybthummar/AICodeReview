@@ -113,7 +113,7 @@ function AppSidebar() {
       <aside
         className={`${
           isCollapsed ? "w-20" : "w-64"
-        } bg-white shadow-md flex flex-col h-screen relative transition-all duration-300 border-r`}
+        } sticky top-0 h-screen shrink-0 z-30 bg-white shadow-md flex flex-col border-r transition-all duration-300`}
       >
         {/* Header with Logo */}
         <div className={`px-6 pt-6 pb-5 ${isCollapsed && "px-3"}`}>

@@ -253,12 +253,24 @@ export const getRepoFileContent = async (
   return files;
 };
 
+export interface PullRequestDiffResult {
+  diff: string;
+  title: string;
+  description: string;
+  state: string;
+  merged: boolean;
+  headRef: string;
+  baseRef: string;
+  filesSummary: string;
+  commitsSummary: string;
+}
+
 export async function getPullRequestDiff(
   token: string,
   owner: string,
   repo: string,
   prNumber: number
-) {
+): Promise<PullRequestDiffResult> {
   const octokit = new Octokit({ auth: token });
   const { data: pr } = await octokit.rest.pulls.get({
     owner,
@@ -266,19 +278,77 @@ export async function getPullRequestDiff(
     pull_number: prNumber,
   });
 
-  const { data: diff } = await octokit.rest.pulls.get({
-    owner,
-    repo,
-    pull_number: prNumber,
-    mediaType: {
-      format: "diff",
-    },
-  });
+  let diffText = "";
+  try {
+    const diffRes = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+      owner,
+      repo,
+      pull_number: prNumber,
+      headers: {
+        accept: "application/vnd.github.v3.diff",
+      },
+    });
+    diffText = typeof diffRes.data === "string" ? diffRes.data : "";
+  } catch (err) {
+    console.warn(`Could not fetch direct diff for ${owner}/${repo}#${prNumber}:`, err);
+  }
+
+  let filesSummary = "";
+  try {
+    const { data: files } = await octokit.rest.pulls.listFiles({
+      owner,
+      repo,
+      pull_number: prNumber,
+      per_page: 30,
+    });
+    if (files && files.length > 0) {
+      filesSummary = files
+        .map((f) => `- ${f.filename} (${f.status}, +${f.additions}/-${f.deletions})`)
+        .join("\n");
+
+      if (!diffText || diffText.trim().length === 0) {
+        const patchParts = files
+          .filter((f) => f.patch)
+          .map((f) => `--- a/${f.filename}\n+++ b/${f.filename}\n${f.patch}`);
+        if (patchParts.length > 0) {
+          diffText = patchParts.join("\n\n");
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`Could not fetch files for ${owner}/${repo}#${prNumber}:`, err);
+  }
+
+  let commitsSummary = "";
+  try {
+    const { data: commits } = await octokit.rest.pulls.listCommits({
+      owner,
+      repo,
+      pull_number: prNumber,
+      per_page: 15,
+    });
+    if (commits && commits.length > 0) {
+      commitsSummary = commits
+        .map(
+          (c) =>
+            `- [${c.sha.slice(0, 7)}] ${c.commit.message.split("\n")[0]} (by ${c.commit.author?.name || "contributor"})`
+        )
+        .join("\n");
+    }
+  } catch (err) {
+    console.warn(`Could not fetch commits for ${owner}/${repo}#${prNumber}:`, err);
+  }
 
   return {
-    diff: typeof diff === "string" ? diff : String(diff || ""),
+    diff: diffText,
     title: pr.title || `PR #${prNumber}`,
     description: pr.body || "",
+    state: pr.state,
+    merged: !!pr.merged,
+    headRef: pr.head?.ref || "source",
+    baseRef: pr.base?.ref || "target",
+    filesSummary,
+    commitsSummary,
   };
 }
 
@@ -297,4 +367,69 @@ export async function postReviewComment(
     issue_number: prNumber,
     body: `## 🤖 AI Code Review\n\n${review}\n\n---\n*Automated review powered by RepoPilot AI.*`,
   });
+}
+
+
+export interface GitHubPullRequest {
+  id: number;
+  number: number;
+  title: string;
+  body: string | null;
+  state: "open" | "closed" | string;
+  html_url: string;
+  created_at: string;
+  updated_at: string;
+  user: {
+    login: string;
+    avatar_url: string;
+  };
+  head: {
+    ref: string;
+  };
+  base: {
+    ref: string;
+  };
+}
+
+export async function getOpenPullRequests(
+  token: string,
+  owner: string,
+  repo: string,
+  state: "open" | "closed" | "all" = "all"
+): Promise<GitHubPullRequest[]> {
+  try {
+    const octokit = new Octokit({ auth: token });
+    const { data } = await octokit.rest.pulls.list({
+      owner,
+      repo,
+      state,
+      sort: "updated",
+      direction: "desc",
+      per_page: 30,
+    });
+
+    return data.map((pr) => ({
+      id: pr.id,
+      number: pr.number,
+      title: pr.title || `PR #${pr.number}`,
+      body: pr.body || null,
+      state: pr.state,
+      html_url: pr.html_url,
+      created_at: pr.created_at,
+      updated_at: pr.updated_at,
+      user: {
+        login: pr.user?.login || "unknown",
+        avatar_url: pr.user?.avatar_url || "",
+      },
+      head: {
+        ref: pr.head?.ref || "unknown",
+      },
+      base: {
+        ref: pr.base?.ref || "main",
+      },
+    }));
+  } catch (error) {
+    console.error(`Failed to list pull requests for ${owner}/${repo}:`, error);
+    return [];
+  }
 }

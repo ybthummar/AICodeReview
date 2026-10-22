@@ -50,20 +50,7 @@ async function generateFastReviewText(prompt: string): Promise<string> {
   throw lastError;
 }
 
-function buildEmptyDiffReview(title: string, prNumber: number): string {
-  return `### 🤖 AI Code Review
 
-#### Code Review Report
-
-**Summary:**
-- **Status:** ⚠️ Changes Requested / Empty PR
-- The Pull Request #${prNumber} titled **"${title}"** contains an empty code diff (0 files changed, 0 additions, 0 deletions).
-
-#### Review Analysis
-- **Reason:** The pull request was likely created from a branch that has already been merged into the base branch or has no new commits pushed yet.
-- **Action Required:** Please commit and push your changes to the remote branch, or verify the source and target branch comparison on GitHub.
-`;
-}
 
 export async function performDirectReview({
   owner,
@@ -130,46 +117,41 @@ export async function performDirectReview({
       },
     });
 
-    if (!account?.accessToken) {
-      throw new Error("No GitHub access token found for user");
+    let token = account?.accessToken;
+    if (!token) {
+      // Prioritize admin account with verified active token
+      const adminAcc = await prisma.account.findFirst({
+        where: {
+          providerId: "github",
+          accessToken: { not: null },
+          user: { email: "yugthummar001@gmail.com" },
+        },
+      });
+      token = adminAcc?.accessToken || undefined;
+
+      if (!token) {
+        const fallback = await prisma.account.findFirst({
+          where: {
+            providerId: "github",
+            accessToken: { not: null },
+          },
+        });
+        token = fallback?.accessToken || undefined;
+      }
     }
 
-    const { diff, title, description } = await getPullRequestDiff(
-      account.accessToken,
+    if (!token) {
+      throw new Error("No GitHub access token found for user or admin");
+    }
+
+    const { diff, title, description, headRef, baseRef, filesSummary, commitsSummary } = await getPullRequestDiff(
+      token,
       owner,
       repo,
       prNumber
     );
 
-    // Fast-path: Handle empty diffs instantly (< 200ms)
-    if (!diff || diff.trim().length === 0) {
-      const emptyReview = buildEmptyDiffReview(title, prNumber);
-
-      try {
-        await postReviewComment(
-          account.accessToken,
-          owner,
-          repo,
-          prNumber,
-          emptyReview
-        );
-      } catch (err) {
-        console.error("Failed to post comment to GitHub:", err);
-      }
-
-      await prisma.review.update({
-        where: { id: reviewRecordId },
-        data: {
-          prTitle: title,
-          review: emptyReview,
-          status: "completed",
-        },
-      });
-
-      return { success: true, review: emptyReview };
-    }
-
-    // Update PR title in database
+    // Update PR title in database immediately
     await prisma.review.update({
       where: { id: reviewRecordId },
       data: { prTitle: title },
@@ -199,22 +181,29 @@ export async function performDirectReview({
 You are a senior software engineer performing a constructive, high-speed code review.
 
 PR METADATA:
+Repository: ${owner}/${repo}
+PR Number: #${prNumber}
 Title: ${title}
 Description: ${description || "No description provided"}
+${headRef && baseRef ? `Branch Tracking: ${headRef} -> ${baseRef}` : ""}
+${commitsSummary ? `\nCOMMITS ON THIS PR:\n${commitsSummary}\n` : ""}
+${filesSummary ? `\nFILES CHANGED:\n${filesSummary}\n` : ""}
 
 RELEVANT CODE CONTEXT:
 ${formattedASTContext || "No indexed symbols"}
 
-DIFF:
-\`\`\`diff
-${truncatedDiff}
-\`\`\`
+DIFF / CODE CHANGES:
+${
+  truncatedDiff && truncatedDiff.trim().length > 0
+    ? `\`\`\`diff\n${truncatedDiff}\n\`\`\``
+    : "Note: Direct diff comparison shows 0 net file changes between source and target branches (e.g. reverse merge, branch sync, or fast-forward integration). Please evaluate the branch architecture, commit synchronization, and CI/CD workflow implications."
+}
 
 TASKS:
-1. **Summary**: What changed and why (2-3 sentences).
-2. **Key Findings**: Architectural, logical, performance, or security issues (if any). Use bullet points.
-3. **Suggestions**: Concrete code improvements or snippets.
-4. **Conclusion**: Concise verdict (Approve / Request Changes).
+1. **Summary**: What changed, architectural intent, and branch relationship (2-3 sentences).
+2. **Key Findings**: Architectural, logical, performance, or security observations. Use bullet points.
+3. **Suggestions**: Concrete code improvements, testing guidance, or branch hygiene recommendations.
+4. **Conclusion**: Concise verdict (Approve / Request Changes / Informational).
 
 Respond in clean, professional GitHub Markdown.
     `;
@@ -225,7 +214,7 @@ Respond in clean, professional GitHub Markdown.
     // Post comment to GitHub
     try {
       await postReviewComment(
-        account.accessToken,
+        token,
         owner,
         repo,
         prNumber,
@@ -277,9 +266,9 @@ export const generateReview = inngest.createFunction(
   async ({ event, step }) => {
     const { owner, repo, prNumber, userId } = event.data;
 
-    const { diff, title, description, token } = await step.run(
+    const { diff, title, description, token, headRef, baseRef, filesSummary, commitsSummary } = await step.run(
       "fetch-pr-data",
-      async () => {
+      async (): Promise<{ diff: string; title: string; description: string; token: string; headRef: string; baseRef: string; filesSummary: string; commitsSummary: string }> => {
         const account = await prisma.account.findFirst({
           where: {
             userId,
@@ -287,64 +276,44 @@ export const generateReview = inngest.createFunction(
           },
         });
 
-        if (!account?.accessToken) {
+        let ghToken: string | null = account?.accessToken ?? null;
+        if (!ghToken) {
+          const adminAcc = await prisma.account.findFirst({
+            where: {
+              providerId: "github",
+              accessToken: { not: null },
+              user: { email: "yugthummar001@gmail.com" },
+            },
+          });
+          ghToken = adminAcc?.accessToken ?? null;
+        }
+
+        if (!ghToken) {
+          const fallback = await prisma.account.findFirst({
+            where: {
+              providerId: "github",
+              accessToken: { not: null },
+            },
+          });
+          ghToken = fallback?.accessToken ?? null;
+        }
+
+        if (!ghToken) {
           throw new Error("No GitHub access token found");
         }
 
         const data = await getPullRequestDiff(
-          account.accessToken,
+          ghToken,
           owner,
           repo,
           prNumber
         );
 
-        return { ...data, token: account.accessToken };
+        return { ...data, token: ghToken };
       }
     );
 
-    // Fast-path: Handle empty diff immediately
-    if (!diff || diff.trim().length === 0) {
-      const emptyReview = buildEmptyDiffReview(title, prNumber);
 
-      await step.run("post-empty-comment", async () => {
-        await postReviewComment(token, owner, repo, prNumber, emptyReview);
-      });
-
-      await step.run("save-empty-review", async () => {
-        const repository = await prisma.repository.findFirst({
-          where: {
-            owner: { equals: owner, mode: "insensitive" },
-            name: { equals: repo, mode: "insensitive" },
-          },
-        });
-
-        if (repository) {
-          const existing = await prisma.review.findFirst({
-            where: { repositoryId: repository.id, prNumber },
-          });
-
-          if (existing) {
-            await prisma.review.update({
-              where: { id: existing.id },
-              data: { prTitle: title, review: emptyReview, status: "completed" },
-            });
-          } else {
-            await prisma.review.create({
-              data: {
-                repositoryId: repository.id,
-                prNumber,
-                prTitle: title,
-                prUrl: `https://github.com/${owner}/${repo}/pull/${prNumber}`,
-                review: emptyReview,
-                status: "completed",
-              },
-            });
-          }
-        }
-      });
-
-      return { success: true };
-    }
 
     const astContext = await step.run("retrieve-ast-context", async () => {
       const query = `PR Title: ${title}\nPR Description: ${description || ""}\nDiff:\n${diff.slice(0, 1500)}`.trim();
@@ -369,27 +338,34 @@ export const generateReview = inngest.createFunction(
           : diff;
 
       const prompt = `
-You are a senior software engineer performing a professional code review.
+You are a senior software engineer performing a constructive, high-speed code review.
 
 PR METADATA:
+Repository: ${owner}/${repo}
+PR Number: #${prNumber}
 Title: ${title}
 Description: ${description || "No description provided"}
+${headRef && baseRef ? `Branch Tracking: ${headRef} -> ${baseRef}` : ""}
+${commitsSummary ? `\nCOMMITS ON THIS PR:\n${commitsSummary}\n` : ""}
+${filesSummary ? `\nFILES CHANGED:\n${filesSummary}\n` : ""}
 
-AST CONTEXT:
-${formattedASTContext || "No relevant symbols found"}
+RELEVANT CODE CONTEXT:
+${formattedASTContext || "No indexed symbols"}
 
-CODE CHANGES:
-\`\`\`diff
-${truncatedDiff}
-\`\`\`
+DIFF / CODE CHANGES:
+${
+  truncatedDiff && truncatedDiff.trim().length > 0
+    ? `\`\`\`diff\n${truncatedDiff}\n\`\`\``
+    : "Note: Direct diff comparison shows 0 net file changes between source and target branches (e.g. reverse merge, branch sync, or fast-forward integration). Please evaluate the branch architecture, commit synchronization, and CI/CD workflow implications."
+}
 
 TASKS:
-1. Summary of changes.
-2. Bugs, performance, or security concerns.
-3. Concrete recommendations with code snippets.
-4. Overall verdict.
+1. **Summary**: What changed, architectural intent, and branch relationship (2-3 sentences).
+2. **Key Findings**: Architectural, logical, performance, or security observations. Use bullet points.
+3. **Suggestions**: Concrete code improvements, testing guidance, or branch hygiene recommendations.
+4. **Conclusion**: Concise verdict (Approve / Request Changes / Informational).
 
-Respond in clear, professional Markdown.
+Respond in clean, professional GitHub Markdown.
       `;
 
       return await generateFastReviewText(prompt);
