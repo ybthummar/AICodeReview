@@ -151,7 +151,7 @@ Output JSON format:
 `;
 
     const { text } = await generateText({
-      model: google("gemini-flash-latest"),
+      model: google("gemini-3.5-flash"),
       temperature: 0.3,
       prompt,
     });
@@ -202,15 +202,65 @@ export async function sendEmail(repositoryId: string) {
       throw new Error("Repository ID is required");
     }
 
-    await inngest.send({
-      name: "repo.weekly.summary",
-      data: {
-        repositoryId,
-        triggeredBy: "manual",
-        userId: session.user.id,
-        managerEmail: session.user.email, 
-      },
-    });
+    let queuedWithInngest = false;
+    if (process.env.INNGEST_EVENT_KEY) {
+      try {
+        await inngest.send({
+          name: "repo.weekly.summary",
+          data: {
+            repositoryId,
+            triggeredBy: "manual",
+            userId: session.user.id,
+            managerEmail: session.user.email, 
+          },
+        });
+        queuedWithInngest = true;
+      } catch (inngestErr) {
+        console.warn("Inngest dispatch failed for repo.weekly.summary, falling back to direct delivery:", inngestErr);
+      }
+    }
+
+    if (!queuedWithInngest) {
+      // Direct execution fallback
+      const repo = await prisma.repository.findUnique({
+        where: { id: repositoryId },
+        include: {
+          repositoryClients: {
+            include: {
+              client: true,
+            },
+          },
+          reviews: {
+            orderBy: { createdAt: "desc" },
+            take: 10,
+          },
+          user: true,
+        },
+      });
+
+      if (repo && repo.repositoryClients.length > 0) {
+        const aiSummary = await generateRepoSummary(repo);
+        const { sendMail, wrapEmailTemplate } = await import("@/lib/mail");
+        const emailHtml = wrapEmailTemplate(aiSummary.html, repo.name);
+
+        for (const rc of repo.repositoryClients) {
+          try {
+            await sendMail({
+              to: rc.client.email,
+              subject: `Weekly Update - ${repo.name}`,
+              html: emailHtml,
+              cc: session.user.email,
+            });
+            await prisma.repositoryClient.update({
+              where: { id: rc.id },
+              data: { deliveredAt: new Date() },
+            });
+          } catch (mailErr) {
+            console.error(`Failed to send email to ${rc.client.email}:`, mailErr);
+          }
+        }
+      }
+    }
 
     return { success: true };
   } catch (error) {

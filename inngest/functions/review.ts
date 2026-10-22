@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { inngest } from "../client";
 import {
   getPullRequestDiff,
@@ -13,18 +14,55 @@ function formatASTContext(symbols: any[]) {
   if (!symbols || symbols.length === 0) return "";
 
   return symbols
+    .slice(0, 5)
     .map((s) => {
       if (s.type === "symbol" || s.symbolName) {
-        return `File: ${s.path}
-Symbol: ${s.symbolName ?? "unknown"}
-Type: ${s.symbolType ?? "unknown"}
-Lines: ${s.startLine ?? "?"}-${s.endLine ?? "?"}`;
+        return `File: ${s.path} | Symbol: ${s.symbolName ?? "unknown"} (${s.symbolType ?? "unknown"}) | Lines: ${s.startLine ?? "?"}-${s.endLine ?? "?"}`;
       } else if (s.content) {
-        return `File: ${s.path}\nSnippet:\n${s.content.slice(0, 500)}`;
+        return `File: ${s.path}\nSnippet:\n${s.content.slice(0, 300)}`;
       }
       return `File: ${s.path}`;
     })
     .join("\n\n");
+}
+
+async function generateFastReviewText(prompt: string): Promise<string> {
+  const modelsToTry = [
+    "gemini-flash-lite-latest",
+    "gemini-flash-latest",
+    "gemini-3.5-flash",
+  ];
+
+  let lastError: unknown;
+  for (const modelName of modelsToTry) {
+    try {
+      const { text } = await generateText({
+        model: google(modelName),
+        prompt,
+      });
+      return text;
+    } catch (err) {
+      console.warn(`Model ${modelName} failed or busy, trying fallback...`);
+      lastError = err;
+    }
+  }
+
+  throw lastError;
+}
+
+function buildEmptyDiffReview(title: string, prNumber: number): string {
+  return `### 🤖 AI Code Review
+
+#### Code Review Report
+
+**Summary:**
+- **Status:** ⚠️ Changes Requested / Empty PR
+- The Pull Request #${prNumber} titled **"${title}"** contains an empty code diff (0 files changed, 0 additions, 0 deletions).
+
+#### Review Analysis
+- **Reason:** The pull request was likely created from a branch that has already been merged into the base branch or has no new commits pushed yet.
+- **Action Required:** Please commit and push your changes to the remote branch, or verify the source and target branch comparison on GitHub.
+`;
 }
 
 export async function performDirectReview({
@@ -38,98 +76,8 @@ export async function performDirectReview({
   prNumber: number;
   userId: string;
 }) {
-  console.log(`Starting direct PR review for ${owner}/${repo}#${prNumber}`);
+  console.log(`Starting lightning direct PR review for ${owner}/${repo}#${prNumber}`);
 
-  const account = await prisma.account.findFirst({
-    where: {
-      userId,
-      providerId: "github",
-    },
-  });
-
-  if (!account?.accessToken) {
-    throw new Error("No GitHub access token found");
-  }
-
-  const { diff, title, description } = await getPullRequestDiff(
-    account.accessToken,
-    owner,
-    repo,
-    prNumber
-  );
-
-  const query = `
-PR Title: ${title}
-PR Description: ${description || ""}
-Diff Summary:
-${diff.slice(0, 2000)}
-  `.trim();
-
-  let astContext: ASTSymbolContext[] = [];
-  try {
-    astContext = (await retrieveContext(
-      query,
-      `${owner}/${repo}`
-    )) as ASTSymbolContext[];
-  } catch (err) {
-    console.warn("Failed to retrieve context from Pinecone:", err);
-  }
-
-  const formattedASTContext = formatASTContext(astContext);
-  const truncatedDiff = diff.length > 25000 ? diff.slice(0, 25000) + "\n\n...[Diff truncated due to size]..." : diff;
-
-  const prompt = `
-You are a senior software engineer performing a thorough, constructive code review.
-
-This repository uses RAG indexing. The context below represents specific functions, routes, or classes related to the pull request.
-
-====================
-PR METADATA
-====================
-Title: ${title}
-Description: ${description || "No description provided"}
-
-====================
-RELEVANT CODE CONTEXT (from RAG)
-====================
-${formattedASTContext || "No relevant indexed symbols found"}
-
-====================
-CODE CHANGES (DIFF)
-====================
-\`\`\`diff
-${truncatedDiff}
-\`\`\`
-
-====================
-REVIEW TASKS
-====================
-1. Walk through the changes: explain WHAT changed and WHY.
-2. Identify logical, architectural, performance, or security issues (if any).
-3. Comment specifically on affected functions, routes, or handlers.
-4. Suggest concrete improvements with code snippets and reasoning.
-5. If applicable, generate a SIMPLE Mermaid sequence diagram illustrating the flow.
-   - Valid Mermaid syntax only (\`\`\`mermaid ... \`\`\`)
-   - Keep it minimal and avoid special characters in node labels.
-
-Respond in clear, professional Markdown.
-  `;
-
-  // Use the verified working Gemini model
-  const { text: review } = await generateText({
-    model: google("gemini-flash-latest"),
-    prompt,
-  });
-
-  // Post the review comment back to GitHub PR
-  try {
-    await postReviewComment(account.accessToken, owner, repo, prNumber, review);
-    console.log(`Successfully posted review comment on GitHub PR ${owner}/${repo}#${prNumber}`);
-  } catch (err) {
-    console.error(`Failed to post comment to GitHub for ${owner}/${repo}#${prNumber}:`, err);
-  }
-
-  // Save the review to the database
   const repository = await prisma.repository.findFirst({
     where: {
       owner: { equals: owner, mode: "insensitive" },
@@ -137,44 +85,193 @@ Respond in clear, professional Markdown.
     },
   });
 
-  if (repository) {
-    // Check if an existing review for this PR is pending or failed and update it, or create a new one
-    const existing = await prisma.review.findFirst({
-      where: {
-        repositoryId: repository.id,
-        prNumber,
-      },
-      orderBy: { createdAt: "desc" },
-    });
-
-    if (existing && existing.status !== "completed") {
-      await prisma.review.update({
-        where: { id: existing.id },
-        data: {
-          prTitle: title,
-          review,
-          status: "completed",
-        },
-      });
-    } else {
-      await prisma.review.create({
-        data: {
-          repositoryId: repository.id,
-          prNumber,
-          prTitle: title,
-          prUrl: `https://github.com/${owner}/${repo}/pull/${prNumber}`,
-          review,
-          status: "completed",
-        },
-      });
-    }
+  if (!repository) {
+    throw new Error(`Repository ${owner}/${repo} not found in database`);
   }
 
-  return { success: true, review };
+  // Ensure an existing review record exists in DB with 'pending'
+  const existingReview = await prisma.review.findFirst({
+    where: {
+      repositoryId: repository.id,
+      prNumber,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  let reviewRecordId = existingReview?.id;
+
+  if (!reviewRecordId) {
+    const created = await prisma.review.create({
+      data: {
+        repositoryId: repository.id,
+        prNumber,
+        prTitle: `PR #${prNumber}`,
+        prUrl: `https://github.com/${owner}/${repo}/pull/${prNumber}`,
+        review: "AI Review in progress... Analyzing code changes and repository context.",
+        status: "pending",
+      },
+    });
+    reviewRecordId = created.id;
+  } else if (existingReview?.status !== "completed") {
+    await prisma.review.update({
+      where: { id: reviewRecordId },
+      data: {
+        status: "pending",
+        review: "AI Review in progress... Analyzing code changes and repository context.",
+      },
+    });
+  }
+
+  try {
+    const account = await prisma.account.findFirst({
+      where: {
+        userId,
+        providerId: "github",
+      },
+    });
+
+    if (!account?.accessToken) {
+      throw new Error("No GitHub access token found for user");
+    }
+
+    const { diff, title, description } = await getPullRequestDiff(
+      account.accessToken,
+      owner,
+      repo,
+      prNumber
+    );
+
+    // Fast-path: Handle empty diffs instantly (< 200ms)
+    if (!diff || diff.trim().length === 0) {
+      const emptyReview = buildEmptyDiffReview(title, prNumber);
+
+      try {
+        await postReviewComment(
+          account.accessToken,
+          owner,
+          repo,
+          prNumber,
+          emptyReview
+        );
+      } catch (err) {
+        console.error("Failed to post comment to GitHub:", err);
+      }
+
+      await prisma.review.update({
+        where: { id: reviewRecordId },
+        data: {
+          prTitle: title,
+          review: emptyReview,
+          status: "completed",
+        },
+      });
+
+      return { success: true, review: emptyReview };
+    }
+
+    // Update PR title in database
+    await prisma.review.update({
+      where: { id: reviewRecordId },
+      data: { prTitle: title },
+    });
+
+    // Retrieve RAG context with a 2.5-second timeout so Pinecone never blocks the AI review
+    const query = `PR Title: ${title}\nPR Description: ${description || ""}\nDiff:\n${diff.slice(0, 1500)}`.trim();
+    let astContext: ASTSymbolContext[] = [];
+
+    try {
+      const astPromise = retrieveContext(query, `${owner}/${repo}`, 5) as Promise<ASTSymbolContext[]>;
+      const timeoutPromise = new Promise<ASTSymbolContext[]>((resolve) =>
+        setTimeout(() => resolve([]), 2500)
+      );
+      astContext = await Promise.race([astPromise, timeoutPromise]);
+    } catch (err) {
+      console.warn("Context retrieval bypassed:", err);
+    }
+
+    const formattedASTContext = formatASTContext(astContext);
+    const truncatedDiff =
+      diff.length > 20000
+        ? diff.slice(0, 20000) + "\n\n...[Diff truncated due to length]..."
+        : diff;
+
+    const prompt = `
+You are a senior software engineer performing a constructive, high-speed code review.
+
+PR METADATA:
+Title: ${title}
+Description: ${description || "No description provided"}
+
+RELEVANT CODE CONTEXT:
+${formattedASTContext || "No indexed symbols"}
+
+DIFF:
+\`\`\`diff
+${truncatedDiff}
+\`\`\`
+
+TASKS:
+1. **Summary**: What changed and why (2-3 sentences).
+2. **Key Findings**: Architectural, logical, performance, or security issues (if any). Use bullet points.
+3. **Suggestions**: Concrete code improvements or snippets.
+4. **Conclusion**: Concise verdict (Approve / Request Changes).
+
+Respond in clean, professional GitHub Markdown.
+    `;
+
+    // Generate review using the fastest active Gemini model
+    const review = await generateFastReviewText(prompt);
+
+    // Post comment to GitHub
+    try {
+      await postReviewComment(
+        account.accessToken,
+        owner,
+        repo,
+        prNumber,
+        review
+      );
+    } catch (err) {
+      console.error(
+        `Failed to post comment to GitHub for ${owner}/${repo}#${prNumber}:`,
+        err
+      );
+    }
+
+    // Save completed review to the database
+    await prisma.review.update({
+      where: { id: reviewRecordId },
+      data: {
+        prTitle: title,
+        review,
+        status: "completed",
+      },
+    });
+
+    return { success: true, review };
+  } catch (error) {
+    console.error(
+      `Direct review execution failed for ${owner}/${repo}#${prNumber}:`,
+      error
+    );
+
+    const errorMessage =
+      error instanceof Error ? error.message : "Review generation failed";
+
+    await prisma.review.update({
+      where: { id: reviewRecordId },
+      data: {
+        review: `Error performing AI review: ${errorMessage}`,
+        status: "failed",
+      },
+    });
+
+    throw error;
+  }
 }
 
 export const generateReview = inngest.createFunction(
-  { id: "generate-review", concurrency: 5 },
+  { id: "generate-review", concurrency: 10 },
   { event: "pr.review.requested" },
 
   async ({ event, step }) => {
@@ -205,74 +302,97 @@ export const generateReview = inngest.createFunction(
       }
     );
 
+    // Fast-path: Handle empty diff immediately
+    if (!diff || diff.trim().length === 0) {
+      const emptyReview = buildEmptyDiffReview(title, prNumber);
+
+      await step.run("post-empty-comment", async () => {
+        await postReviewComment(token, owner, repo, prNumber, emptyReview);
+      });
+
+      await step.run("save-empty-review", async () => {
+        const repository = await prisma.repository.findFirst({
+          where: {
+            owner: { equals: owner, mode: "insensitive" },
+            name: { equals: repo, mode: "insensitive" },
+          },
+        });
+
+        if (repository) {
+          const existing = await prisma.review.findFirst({
+            where: { repositoryId: repository.id, prNumber },
+          });
+
+          if (existing) {
+            await prisma.review.update({
+              where: { id: existing.id },
+              data: { prTitle: title, review: emptyReview, status: "completed" },
+            });
+          } else {
+            await prisma.review.create({
+              data: {
+                repositoryId: repository.id,
+                prNumber,
+                prTitle: title,
+                prUrl: `https://github.com/${owner}/${repo}/pull/${prNumber}`,
+                review: emptyReview,
+                status: "completed",
+              },
+            });
+          }
+        }
+      });
+
+      return { success: true };
+    }
+
     const astContext = await step.run("retrieve-ast-context", async () => {
-      const query = `
-          PR Title: ${title}
-          PR Description: ${description || ""}
-          Diff Summary:
-          ${diff.slice(0, 2000)}
-                `.trim();
+      const query = `PR Title: ${title}\nPR Description: ${description || ""}\nDiff:\n${diff.slice(0, 1500)}`.trim();
 
       try {
-        return (await retrieveContext(
-          query,
-          `${owner}/${repo}`
-        )) as ASTSymbolContext[];
+        const astPromise = retrieveContext(query, `${owner}/${repo}`, 5) as Promise<ASTSymbolContext[]>;
+        const timeoutPromise = new Promise<ASTSymbolContext[]>((resolve) =>
+          setTimeout(() => resolve([]), 2500)
+        );
+        return await Promise.race([astPromise, timeoutPromise]);
       } catch (err) {
-        console.warn("RAG retrieval failed, proceeding without extra context:", err);
+        console.warn("RAG retrieval skipped:", err);
         return [] as ASTSymbolContext[];
       }
     });
 
     const review = await step.run("generate-ai-review", async () => {
       const formattedASTContext = formatASTContext(astContext);
-      const truncatedDiff = diff.length > 25000 ? diff.slice(0, 25000) + "\n\n...[Diff truncated due to size]..." : diff;
+      const truncatedDiff =
+        diff.length > 20000
+          ? diff.slice(0, 20000) + "\n\n...[Diff truncated due to size]..."
+          : diff;
 
       const prompt = `
-          You are a senior software engineer performing a professional code review.
+You are a senior software engineer performing a professional code review.
 
-          This system uses AST-based indexing. The context below represents
-          specific functions, routes, or classes related to the pull request.
+PR METADATA:
+Title: ${title}
+Description: ${description || "No description provided"}
 
-          ====================
-          PR METADATA
-          ====================
-          Title: ${title}
-          Description: ${description || "No description provided"}
+AST CONTEXT:
+${formattedASTContext || "No relevant symbols found"}
 
-          ====================
-          AST CONTEXT (Symbol-Level)
-          ====================
-          ${formattedASTContext || "No relevant symbols found"}
+CODE CHANGES:
+\`\`\`diff
+${truncatedDiff}
+\`\`\`
 
-          ====================
-          CODE CHANGES (DIFF)
-          ====================
-          \`\`\`diff
-          ${truncatedDiff}
-          \`\`\`
+TASKS:
+1. Summary of changes.
+2. Bugs, performance, or security concerns.
+3. Concrete recommendations with code snippets.
+4. Overall verdict.
 
-          ====================
-          REVIEW TASKS
-          ====================
-          1. Walk through the changes and explain WHAT changed and WHY.
-          2. Identify logical, architectural, performance, or security issues.
-          3. Comment on affected functions, routes, or handlers.
-          4. Suggest concrete improvements with reasoning.
-          5. If applicable, generate a SIMPLE Mermaid sequence diagram.
-            - Valid Mermaid syntax only
-            - Keep it minimal
-            - Avoid special characters in labels
+Respond in clear, professional Markdown.
+      `;
 
-          Respond in clear, professional Markdown.
-        `;
-
-      const { text } = await generateText({
-        model: google("gemini-flash-latest"),
-        prompt,
-      });
-
-      return text;
+      return await generateFastReviewText(prompt);
     });
 
     await step.run("post-comment", async () => {
@@ -299,7 +419,7 @@ export const generateReview = inngest.createFunction(
         orderBy: { createdAt: "desc" },
       });
 
-      if (existing && existing.status !== "completed") {
+      if (existing) {
         await prisma.review.update({
           where: { id: existing.id },
           data: {

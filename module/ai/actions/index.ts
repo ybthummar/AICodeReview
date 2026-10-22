@@ -39,9 +39,40 @@ export async function reviewPullRequest(
 
     const token = githubAccount.accessToken;
 
-    // Validate PR exists on GitHub
+    // Validate PR exists on GitHub and get title
     const { title } = await getPullRequestDiff(token, owner, repo, prNumber);
     console.log(`Reviewing ${owner}/${repo}#${prNumber}: "${title}"`);
+
+    // Ensure a pending review record exists immediately so the UI shows it in real-time
+    const existing = await prisma.review.findFirst({
+      where: {
+        repositoryId: repository.id,
+        prNumber,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (existing) {
+      await prisma.review.update({
+        where: { id: existing.id },
+        data: {
+          prTitle: title,
+          review: "AI Review in progress... Fetching repository AST context and generating insights.",
+          status: "pending",
+        },
+      });
+    } else {
+      await prisma.review.create({
+        data: {
+          repositoryId: repository.id,
+          prNumber,
+          prTitle: title,
+          prUrl: `https://github.com/${owner}/${repo}/pull/${prNumber}`,
+          review: "AI Review in progress... Fetching repository AST context and generating insights.",
+          status: "pending",
+        },
+      });
+    }
 
     // If INNGEST_EVENT_KEY is configured, dispatch to Inngest for background execution
     let queuedWithInngest = false;
@@ -66,7 +97,7 @@ export async function reviewPullRequest(
       }
     }
 
-    // If Inngest is not configured or sending failed, execute directly in background
+    // If Inngest is not configured or sending failed, execute directly
     if (!queuedWithInngest) {
       console.log(`Running direct review execution for ${owner}/${repo}#${prNumber}`);
       performDirectReview({
@@ -75,13 +106,22 @@ export async function reviewPullRequest(
         prNumber,
         userId: repository.user.id,
       }).catch((directErr) => {
-        console.error(`Direct review execution failed for ${owner}/${repo}#${prNumber}:`, directErr);
+        console.error(
+          `Direct review execution failed for ${owner}/${repo}#${prNumber}:`,
+          directErr
+        );
       });
     }
 
-    return { success: true, message: queuedWithInngest ? "Review Queued" : "Review Started" };
+    return {
+      success: true,
+      message: queuedWithInngest ? "Review Queued" : "Review Started",
+    };
   } catch (error) {
-    console.error(`reviewPullRequest failed for ${owner}/${repo}#${prNumber}:`, error);
+    console.error(
+      `reviewPullRequest failed for ${owner}/${repo}#${prNumber}:`,
+      error
+    );
 
     try {
       const repository = await prisma.repository.findFirst({

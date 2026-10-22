@@ -2,7 +2,6 @@
 
 import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   Github,
   Zap,
@@ -40,14 +39,33 @@ export default function LandingPage() {
             </span>
           </div>
 
-          <nav className="hidden items-center gap-8 text-sm font-medium text-slate-600 md:flex">
-            <Link href="#features" className="transition-colors hover:text-primary">
-              Features
+          <div className="flex items-center gap-3 sm:gap-4">
+            <nav className="hidden items-center gap-6 text-sm font-medium text-slate-600 md:flex">
+              <Link href="#features" className="transition-colors hover:text-primary">
+                Features
+              </Link>
+              <Link href="#how-it-works" className="transition-colors hover:text-primary">
+                How it works
+              </Link>
+            </nav>
+
+            <Link href="/dashboard/admin">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 rounded-xl border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 font-semibold text-xs h-9 px-3"
+              >
+                <ShieldCheck className="h-4 w-4 text-purple-600" />
+                Admin Panel
+              </Button>
             </Link>
-            <Link href="#how-it-works" className="transition-colors hover:text-primary">
-              How it works
+
+            <Link href="/dashboard">
+              <Button size="sm" className="rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs h-9 px-4 shadow-sm">
+                Dashboard
+              </Button>
             </Link>
-          </nav>
+          </div>
         </div>
       </header>
 
@@ -60,9 +78,9 @@ export default function LandingPage() {
               AI code review for modern engineering teams
             </div>
 
-            <h1 className="mx-auto max-w-5xl text-4xl font-black tracking-[-0.08em] text-slate-950 md:text-6xl lg:text-7xl">
+            <h1 className="mx-auto max-w-5xl text-4xl font-black tracking-[-0.04em] text-slate-950 sm:text-5xl md:text-6xl lg:text-7xl leading-[1.15] md:leading-[1.12]">
               The AI code reviewer
-              <span className="mt-2 block bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 bg-clip-text text-transparent">
+              <span className="mt-2 block bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 bg-clip-text text-transparent pb-3 pt-1">
                 your team will actually trust
               </span>
             </h1>
@@ -81,13 +99,16 @@ export default function LandingPage() {
                   Start Reviewing
                 </Button>
               </Link>
-              <Button
-                size="lg"
-                variant="outline"
-                className="h-12 rounded-2xl border-slate-200 bg-white/80 px-8 text-base font-semibold text-slate-700 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50"
-              >
-                View Sample
-              </Button>
+              <Link href="/dashboard/admin">
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="h-12 rounded-2xl border-purple-200 bg-purple-50/80 px-6 text-base font-semibold text-purple-700 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-purple-300 hover:bg-purple-100 flex items-center gap-2"
+                >
+                  <ShieldCheck className="w-5 h-5 text-purple-600" />
+                  Admin Panel
+                </Button>
+              </Link>
             </div>
 
             <div className="relative mx-auto mt-16 max-w-5xl">

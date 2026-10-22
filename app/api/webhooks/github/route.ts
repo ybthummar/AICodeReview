@@ -61,7 +61,12 @@ export async function POST(req: NextRequest) {
 
       const [owner, repoName] = repo.split("/");
 
-      if (action === "opened" || action === "synchronize" || action === "reopened") {
+      if (
+        action === "opened" ||
+        action === "synchronize" ||
+        action === "reopened" ||
+        action === "ready_for_review"
+      ) {
         console.log(`Received GitHub webhook for ${action} PR ${repo}#${prNumber}`);
 
         // Fire and forget: trigger review without keeping the webhook request hanging

@@ -177,6 +177,8 @@ function RepositoryPage() {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
+    refetch,
+    isRefetching,
   } = useRepositories();
 
   const { mutate: connectRepo } = useConnectRepository();
@@ -242,8 +244,19 @@ function RepositoryPage() {
               Failed to fetch data from GitHub. Please check your connection and
               permissions, then try again.
             </p>
-            <Button className="bg-blue-600 hover:bg-blue-700 text-white w-full mt-4">
-              Try Again
+            <Button
+              onClick={() => refetch()}
+              disabled={isRefetching}
+              className="bg-blue-600 hover:bg-blue-700 text-white w-full mt-4"
+            >
+              {isRefetching ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Retrying...
+                </>
+              ) : (
+                "Try Again"
+              )}
             </Button>
           </div>
         </Card>
@@ -265,10 +278,12 @@ function RepositoryPage() {
           </div>
           <Button
             variant="outline"
-            className="text-blue-600 border-blue-300 hover:bg-blue-50 hover:border-blue-400 whitespace-nowrap bg-white"
+            onClick={() => refetch()}
+            disabled={isRefetching}
+            className="text-blue-600 border-blue-300 hover:bg-blue-50 hover:border-blue-400 whitespace-nowrap bg-white flex items-center"
           >
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Sync Repos
+            <RefreshCw className={`mr-2 h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
+            {isRefetching ? "Syncing..." : "Sync Repos"}
           </Button>
         </div>
 

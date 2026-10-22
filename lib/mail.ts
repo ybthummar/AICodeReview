@@ -18,6 +18,7 @@ export async function sendMail({
   cc,
 }: SendMailOptions) { 
   try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const emailPayload: any = {
       from,
       to,

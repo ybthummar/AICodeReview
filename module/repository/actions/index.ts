@@ -1,5 +1,6 @@
 "use server";
 
+import { isAdminUser } from "@/lib/admin";
 import prisma from "@/lib/db";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
@@ -49,30 +50,58 @@ export const connectRepository = async (
     throw new Error("Unauthorized");
   }
 
+  // Check subscription and enforce 1 repository limit for Free users (Admin has unlimited repos)
+  const user = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { name: true, email: true, subscriptionTier: true, subscriptionStatus: true },
+  });
+
+  const isPro =
+    user?.subscriptionTier === "PRO" && user?.subscriptionStatus === "ACTIVE";
+  const isAdmin = isAdminUser(user || session.user);
+
+  const alreadyConnected = await prisma.repository.findFirst({
+    where: {
+      githubId: BigInt(githubId),
+      userId: session.user.id,
+    },
+  });
+
+  if (!isPro && !isAdmin && !alreadyConnected) {
+    const connectedCount = await prisma.repository.count({
+      where: { userId: session.user.id },
+    });
+
+    if (connectedCount >= 1) {
+      throw new Error(
+        "Free plan is limited to 1 repository. Upgrade to PRO (₹149/month) or contact Admin to connect multiple repositories."
+      );
+    }
+  }
+
   const webhook = await createWebhook(owner, repo);
 
-  if (webhook) {
-    await prisma.repository.upsert({
-      where: {
-        githubId: BigInt(githubId),
-      },
-      update: {
-        name: repo,
-        owner,
-        fullName: `${owner}/${repo}`,
-        url: `https://github.com/${owner}/${repo}`,
-        userId: session.user.id,
-      },
-      create: {
-        githubId: BigInt(githubId),
-        name: repo,
-        owner,
-        fullName: `${owner}/${repo}`,
-        url: `https://github.com/${owner}/${repo}`,
-        userId: session.user.id,
-      },
-    });
-  }
+  // Always save and connect repository in DB, even if webhook registration was not possible (e.g. localhost or org perms)
+  await prisma.repository.upsert({
+    where: {
+      githubId: BigInt(githubId),
+    },
+    update: {
+      name: repo,
+      owner,
+      fullName: `${owner}/${repo}`,
+      url: `https://github.com/${owner}/${repo}`,
+      userId: session.user.id,
+    },
+    create: {
+      githubId: BigInt(githubId),
+      name: repo,
+      owner,
+      fullName: `${owner}/${repo}`,
+      url: `https://github.com/${owner}/${repo}`,
+      userId: session.user.id,
+    },
+  });
 
   // Trigger indexing for RAG: try Inngest first, fall back to direct execution
   let queuedWithInngest = false;

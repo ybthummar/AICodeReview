@@ -90,31 +90,36 @@ export const createWebhook = async (owner: string, repo: string) => {
 
   const webhookUrl = `${process.env.NEXT_PUBLIC_APP_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/api/webhooks/github`;
 
-  const { data: hooks } = await octokit.rest.repos.listWebhooks({
-    owner,
-    repo,
-  });
+  try {
+    const { data: hooks } = await octokit.rest.repos.listWebhooks({
+      owner,
+      repo,
+    });
 
-  const existingHook = hooks.find((hook) => hook.config.url === webhookUrl);
+    const existingHook = hooks.find((hook) => hook.config.url === webhookUrl);
 
-  if (existingHook) {
-    return existingHook;
+    if (existingHook) {
+      return existingHook;
+    }
+
+    const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
+
+    const { data } = await octokit.rest.repos.createWebhook({
+      owner,
+      repo,
+      config: {
+        url: webhookUrl,
+        content_type: "json",
+        ...(webhookSecret ? { secret: webhookSecret } : {}),
+      },
+      events: ["pull_request"],
+    });
+
+    return data;
+  } catch (error) {
+    console.warn(`Could not register GitHub webhook for ${owner}/${repo}:`, error);
+    return null;
   }
-
-  const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
-
-  const { data } = await octokit.rest.repos.createWebhook({
-    owner,
-    repo,
-    config: {
-      url: webhookUrl,
-      content_type: "json",
-      ...(webhookSecret ? { secret: webhookSecret } : {}),
-    },
-    events: ["pull_request"],
-  });
-
-  return data;
 };
 
 export const deleteWebhook = async (owner: string, repo: string) => {
