@@ -25,7 +25,7 @@ export interface ConnectedRepoPR {
   reviewStatus?: string;
 }
 
-export async function getReviews(scope: "all" | "mine" = "all") {
+export async function getReviews(scope: "mine" | "all" = "mine") {
   const session = await auth.api.getSession({
     headers: await headers(),
   });
@@ -36,16 +36,16 @@ export async function getReviews(scope: "all" | "mine" = "all") {
 
   const isAdmin = isAdminUser(session.user);
 
-  // By default ('all'), display reviews across all connected repositories in the workspace so anyone viewing the app can see the code reviews.
-  // If the user specifies 'mine' and is not an admin, filter to only their own repositories.
+  // Strictly user-wise: by default, show ONLY reviews for repositories owned by THIS user.
+  // Only authorized admins who explicitly choose scope === "all" can inspect global reviews.
   const whereClause =
-    !isAdmin && scope === "mine"
-      ? {
+    isAdmin && scope === "all"
+      ? {}
+      : {
           repository: {
             userId: session.user.id,
           },
-        }
-      : {};
+        };
 
   const reviews = await prisma.review.findMany({
     where: whereClause,
@@ -61,7 +61,9 @@ export async function getReviews(scope: "all" | "mine" = "all") {
   return reviews;
 }
 
-export async function getConnectedReposPullRequests(): Promise<ConnectedRepoPR[]> {
+export async function getConnectedReposPullRequests(
+  scope: "mine" | "all" = "mine"
+): Promise<ConnectedRepoPR[]> {
   const session = await auth.api.getSession({
     headers: await headers(),
   });
@@ -72,9 +74,10 @@ export async function getConnectedReposPullRequests(): Promise<ConnectedRepoPR[]
 
   const isAdmin = isAdminUser(session.user);
 
-  // Fetch connected repositories
+  // Strictly user-wise: only fetch pull requests from repositories connected by THIS user.
+  // Global PRs are only loaded if an admin explicitly toggles scope === "all".
   const repositories = await prisma.repository.findMany({
-    where: isAdmin ? {} : { userId: session.user.id },
+    where: isAdmin && scope === "all" ? {} : { userId: session.user.id },
     include: {
       user: {
         include: {
