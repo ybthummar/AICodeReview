@@ -8,7 +8,6 @@ export const scheduleRepoSummaries = inngest.createFunction(
   {
     id: "schedule-repo-summaries",
     retries: 1,
-    cron: "TZ=America/New_York 0 10 * * 1", 
   },
   { cron: "TZ=America/New_York 0 10 * * 1" },
   async ({ step, logger }) => {

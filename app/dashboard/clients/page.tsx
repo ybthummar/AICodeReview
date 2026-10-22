@@ -164,20 +164,18 @@ export default function ClientsPage() {
   }
 
   return (
-    <div className="min-h-screen ">
+    <div className="min-h-screen px-2 sm:px-6 lg:px-8 py-4 max-w-7xl mx-auto space-y-6">
       {/* Header */}
-      <div className="">
-        <div className="max-w-7xl mx-auto px-3 py-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div>
-                <h1 className="text-3xl font-bold text-slate-900">Clients</h1>
-                <p className="text-sm text-slate-500 pt-1">
-                  Connect Clients with Repositories to update them status by AI
-                  regularly
-                </p>
-              </div>
+      <div className="pb-3 border-b border-slate-200/70">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight text-slate-900 pb-0.5">Clients & Stakeholders</h1>
+              <p className="text-sm text-slate-500 mt-1">
+                Map clients and stakeholders to repositories for automated weekly AI status updates.
+              </p>
             </div>
+          </div>
 
             <Dialog open={open} onOpenChange={setOpen}>
               <DialogTrigger asChild>
@@ -259,7 +257,6 @@ export default function ClientsPage() {
                 </form>
               </DialogContent>
             </Dialog>
-          </div>
         </div>
       </div>
 

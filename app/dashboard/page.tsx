@@ -24,6 +24,7 @@ import {
   MessageSquare,
   Loader2,
   Clock10,
+  TrendingUp,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -49,23 +50,35 @@ const getGreeting = () => {
   return "Good Evening";
 };
 
-const StatCard: React.FC<StatCardProps> = ({
+interface EnhancedStatCardProps extends StatCardProps {
+  badge?: string;
+  bgTint?: string;
+}
+
+const StatCard: React.FC<EnhancedStatCardProps> = ({
   title,
   value,
   icon: Icon,
   iconColor,
+  bgTint = "bg-blue-50",
 }) => (
-  <Card className="shadow-md transition-all duration-300 hover:shadow-lg hover:border-blue-200">
-    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-      <CardTitle className="text-md font-medium text-gray-500">
+  <Card className="shadow-md border border-slate-200/80 bg-white hover:shadow-lg hover:border-blue-200 transition-all duration-300">
+    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+      <CardTitle className="text-sm font-medium text-slate-500">
         {title}
       </CardTitle>
-      <Icon className={`h-4 w-4 ${iconColor}`} />
+      <div className={`p-2.5 rounded-xl ${bgTint} flex items-center justify-center`}>
+        <Icon className={`h-4 w-4 ${iconColor}`} />
+      </div>
     </CardHeader>
-    <CardContent>
-      <div className="text-3xl font-bold text-gray-800">
+    <CardContent className="pt-0">
+      <div className="text-3xl font-bold text-slate-900 tracking-tight leading-normal pb-1">
         {value.toLocaleString()}
       </div>
+      <p className="text-xs text-slate-500 flex items-center gap-1 mt-1">
+        <TrendingUp className="w-3 h-3 text-emerald-500" />
+        <span>Synced with GitHub</span>
+      </p>
     </CardContent>
   </Card>
 );
@@ -89,9 +102,9 @@ function DashboardPage() {
   });
 
   const loadingState = (
-    <div className="min-h-[300px] flex items-center justify-center">
-      <Loader2 className="mr-2 h-6 w-6 animate-spin text-blue-600" />
-      <span className="text-lg text-gray-500">Loading Dashboard Data...</span>
+    <div className="min-h-[400px] flex flex-col items-center justify-center gap-3">
+      <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      <span className="text-base text-slate-600 font-medium">Loading your developer dashboard...</span>
     </div>
   );
 
@@ -108,105 +121,121 @@ function DashboardPage() {
   const chartData = monthlyActivity || [];
 
   return (
-    <div className="px-2 sm:px-6 lg:px-8 min-h-screen">
-      <h1 className="text-3xl font-bold text-gray-900 mb-6">
-        {getGreeting()}, {user?.name || ""}
-      </h1>
+    <div className="px-2 sm:px-6 lg:px-8 py-4 min-h-screen max-w-7xl mx-auto space-y-8">
+      {/* Header Greeting */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-2 border-b border-slate-200/60">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight leading-tight">
+            {getGreeting()}, {user?.name || "Developer"} 👋
+          </h1>
+          <p className="text-sm text-slate-500 mt-1">
+            Overview of your GitHub repositories, pull requests, and automated AI code reviews.
+          </p>
+        </div>
+      </div>
 
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4 mb-8">
+      {/* Stats Cards */}
+      <div className="grid gap-5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           title="Total Commits"
           value={dashboardStats.totalCommits}
           icon={GitCommit}
-          iconColor="text-green-500"
+          iconColor="text-emerald-600"
+          bgTint="bg-emerald-50"
         />
         <StatCard
           title="Pull Requests"
           value={dashboardStats.totalPRs}
           icon={GitPullRequest}
-          iconColor="text-blue-500"
+          iconColor="text-blue-600"
+          bgTint="bg-blue-50"
         />
         <StatCard
           title="AI Reviews Given"
           value={dashboardStats.totalReviews}
           icon={MessageSquare}
-          iconColor="text-indigo-500"
+          iconColor="text-indigo-600"
+          bgTint="bg-indigo-50"
         />
         <StatCard
           title="Monitored Repos"
           value={dashboardStats.totalRepos}
           icon={GitBranch}
-          iconColor="text-yellow-500"
+          iconColor="text-amber-600"
+          bgTint="bg-amber-50"
         />
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-12">
-        <div className="lg:col-span-12">
-          <ContributionGraph />
-        </div>
+      {/* Main Activity Heatmap */}
+      <div className="grid gap-6 grid-cols-1">
+        <ContributionGraph />
+      </div>
 
-        <div className="lg:col-span-12">
-          <Card className="shadow-lg transition-all duration-300 hover:shadow-xl p-4 sm:p-6 bg-white">
-            <CardHeader className="px-0 pt-0 pb-4">
-              <CardTitle className="text-xl font-semibold flex items-center">
-                <Clock10 className="w-5 h-5 mr-2 text-blue-600" /> Last 6 Months Activities
+      {/* Monthly Breakdown Chart */}
+      <div className="grid gap-6 grid-cols-1">
+        <Card className="shadow-md border border-slate-200/80 hover:shadow-lg transition-all duration-300 bg-white">
+          <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 gap-2">
+            <div>
+              <CardTitle className="text-xl font-semibold flex items-center gap-2 text-slate-900">
+                <Clock10 className="w-5 h-5 text-blue-600" /> Last 6 Months Activities
               </CardTitle>
-              <CardDescription>
-                A breakdown of your coding and reviewing activity.
+              <CardDescription className="text-xs text-slate-500 mt-1">
+                Comparative breakdown of automated AI code reviews, git commits, and pull requests
               </CardDescription>
-            </CardHeader>
-            <CardContent className="p-0 h-[300px]">
-              {isLoadingActivity ? (
-                <div className="flex items-center justify-center h-full text-gray-500">
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading
-                  Activity Chart...
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={chartData}
-                    margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                    <XAxis dataKey="month" stroke="#6b7280" />
-                    <YAxis stroke="#6b7280" />
-                    <Tooltip
-                      cursor={{ fill: "#f3f4f6" }}
-                      contentStyle={{
-                        borderRadius: "0.5rem",
-                        border: "1px solid #e5e7eb",
-                        fontSize: "14px",
-                      }}
-                    />
-                    <Legend
-                      iconType="circle"
-                      wrapperStyle={{ paddingTop: "10px" }}
-                    />
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 sm:p-6 h-[320px]">
+            {isLoadingActivity ? (
+              <div className="flex items-center justify-center h-full text-slate-500 gap-2">
+                <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+                <span className="text-sm">Loading activity breakdown...</span>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={chartData}
+                  margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <XAxis dataKey="month" stroke="#64748b" fontSize={12} tickLine={false} />
+                  <YAxis stroke="#64748b" fontSize={12} tickLine={false} />
+                  <Tooltip
+                    cursor={{ fill: "rgba(241, 245, 249, 0.6)" }}
+                    contentStyle={{
+                      borderRadius: "0.75rem",
+                      border: "1px solid #e2e8f0",
+                      boxShadow: "0 4px 12px rgba(0, 0, 0, 0.05)",
+                      fontSize: "13px",
+                    }}
+                  />
+                  <Legend
+                    iconType="circle"
+                    wrapperStyle={{ paddingTop: "12px", fontSize: "13px" }}
+                  />
 
-                    <Bar
-                      dataKey="reviews"
-                      fill="#3b82f6"
-                      name="AI Reviews"
-                      radius={[4, 4, 0, 0]}
-                    />
-                    <Bar
-                      dataKey="commits"
-                      fill="#10b981"
-                      name="Commits"
-                      radius={[4, 4, 0, 0]}
-                    />
-                    <Bar
-                      dataKey="prs"
-                      fill="#8b5cf6"
-                      name="Pull Requests"
-                      radius={[4, 4, 0, 0]}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+                  <Bar
+                    dataKey="reviews"
+                    fill="#3b82f6"
+                    name="AI Reviews"
+                    radius={[6, 6, 0, 0]}
+                  />
+                  <Bar
+                    dataKey="commits"
+                    fill="#10b981"
+                    name="Commits"
+                    radius={[6, 6, 0, 0]}
+                  />
+                  <Bar
+                    dataKey="prs"
+                    fill="#8b5cf6"
+                    name="Pull Requests"
+                    radius={[6, 6, 0, 0]}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

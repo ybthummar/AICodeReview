@@ -2,7 +2,7 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { connectRepository } from "../actions";
-import { toast } from "sonner"
+import { toast } from "sonner";
 
 export const useConnectRepository = () => {
   const queryClient = useQueryClient();
@@ -21,11 +21,13 @@ export const useConnectRepository = () => {
     },
     onSuccess: () => {
       toast.success("Repository connected successfully");
-        queryClient.invalidateQueries({ queryKey: ["repositories"] });
+      queryClient.invalidateQueries({ queryKey: ["repositories"] });
     },
     onError: (error) => {
       console.error("Failed to connect repository", error);
-      toast.error("Failed to connect repository");
+      toast.error(
+        error instanceof Error ? error.message : "Failed to connect repository"
+      );
     },
   });
 };

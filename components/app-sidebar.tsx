@@ -34,8 +34,10 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Separator } from "@/components/ui/separator";
+import { ShieldCheck } from "lucide-react";
+import { isAdminUser } from "@/lib/admin";
 
-const navigationItems = [
+const baseNavigationItems = [
   { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { title: "Repositories", href: "/dashboard/repositories", icon: Github },
   { title: "Reviews", href: "/dashboard/reviews", icon: MessageSquareText },
@@ -80,6 +82,19 @@ function AppSidebar() {
   }
 
   const user = session.user;
+  const isAdmin = isAdminUser(user);
+  const navigationList = [
+    ...baseNavigationItems,
+    ...(isAdmin
+      ? [
+          {
+            title: "Admin Panel",
+            href: "/dashboard/admin",
+            icon: ShieldCheck,
+          },
+        ]
+      : []),
+  ];
 
   const userData = {
     name: user?.name || "User",
@@ -136,7 +151,7 @@ function AppSidebar() {
 
         {/* Navigation Menu */}
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-          {navigationItems.map((item) => {
+          {navigationList.map((item) => {
             const active = isActive(item.href);
             const menuItem = (
               <div

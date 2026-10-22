@@ -4,21 +4,6 @@ import { auth } from "@/lib/auth";
 import prisma from "@/lib/db";
 import { headers } from "next/headers";
 
-// interface ContributionCollection {
-//     user : {
-//         contributionsCollection: {
-//             contributionCalendar: {
-//                 totalContributions: number;
-//                 weeks: {
-//                     contribuitonCount : number
-//                     date: string | Date
-//                     color: string
-//                 }
-//             }
-//         }
-//     }
-// }
-
 export const getGitHubToken = async () => {
   const session = await auth.api.getSession({
     headers: await headers(),
@@ -103,30 +88,38 @@ export const createWebhook = async (owner: string, repo: string) => {
     auth: token,
   });
 
-  const webhookUrl = `${process.env.NEXT_PUBLIC_APP_BASE_URL}/api/webhooks/github`;
+  const webhookUrl = `${process.env.NEXT_PUBLIC_APP_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/api/webhooks/github`;
 
-  const { data: hooks } = await octokit.rest.repos.listWebhooks({
-    owner,
-    repo,
-  });
+  try {
+    const { data: hooks } = await octokit.rest.repos.listWebhooks({
+      owner,
+      repo,
+    });
 
-  const existingHook = hooks.find((hook) => hook.config.url === webhookUrl);
+    const existingHook = hooks.find((hook) => hook.config.url === webhookUrl);
 
-  if (existingHook) {
-    return existingHook;
+    if (existingHook) {
+      return existingHook;
+    }
+
+    const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
+
+    const { data } = await octokit.rest.repos.createWebhook({
+      owner,
+      repo,
+      config: {
+        url: webhookUrl,
+        content_type: "json",
+        ...(webhookSecret ? { secret: webhookSecret } : {}),
+      },
+      events: ["pull_request"],
+    });
+
+    return data;
+  } catch (error) {
+    console.warn(`Could not register GitHub webhook for ${owner}/${repo}:`, error);
+    return null;
   }
-
-  const { data } = await octokit.rest.repos.createWebhook({
-    owner,
-    repo,
-    config: {
-      url: webhookUrl,
-      content_type: "json",
-    },
-    events: ["pull_request"],
-  });
-
-  return data;
 };
 
 export const deleteWebhook = async (owner: string, repo: string) => {
@@ -134,7 +127,7 @@ export const deleteWebhook = async (owner: string, repo: string) => {
   const octokit = new Octokit({
     auth: token,
   });
-  const webhookUrl = `${process.env.NEXT_PUBLIC_APP_BASE_URL}/api/webhooks/github`;
+  const webhookUrl = `${process.env.NEXT_PUBLIC_APP_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/api/webhooks/github`;
 
   try {
     const { data: hooks } = await octokit.rest.repos.listWebhooks({
@@ -160,6 +153,25 @@ export const deleteWebhook = async (owner: string, repo: string) => {
     return false;
   }
 };
+
+// Directories to skip when recursively indexing repo content
+const IGNORED_DIRS = new Set([
+  "node_modules",
+  ".git",
+  ".next",
+  ".vercel",
+  "dist",
+  "build",
+  ".cache",
+  "coverage",
+  "__pycache__",
+  ".turbo",
+  ".output",
+  "vendor",
+  "public",
+  ".idea",
+  ".vscode",
+]);
 
 export const getRepoFileContent = async (
   token: string,
@@ -192,27 +204,49 @@ export const getRepoFileContent = async (
 
   for (const item of data) {
     if (item.type === "file") {
-      const { data: fileData } = await octokit.rest.repos.getContent({
-        owner,
-        repo,
-        path: item.path,
-      });
+      // Skip non-code and large binary files early to conserve rate limits
+      if (item.path.match(/\.(png|jpg|jpeg|gif|svg|ico|pdf|zip|tar|gz|woff|woff2|ttf|eot|lock|map|mp4|webm|mp3|wav|ogg)$/i)) {
+        continue;
+      }
 
-      if (
-        !Array.isArray(fileData) &&
-        fileData.type === "file" &&
-        fileData.content
-      ) {
-        if (!item.path.match(/\.(png|jpg|jpeg|gif|svg|ico|pdf|zip|tar|gz)$/i)) {
+      // Only fetch code and text files
+      const ext = item.name.split(".").pop()?.toLowerCase();
+      if (!ext || !["js", "ts", "jsx", "tsx", "py", "go", "java", "rs", "cpp", "c", "cs", "php", "rb", "html", "css", "json", "md", "sql", "prisma", "yaml", "yml"].includes(ext)) {
+        continue;
+      }
+
+      try {
+        const { data: fileData } = await octokit.rest.repos.getContent({
+          owner,
+          repo,
+          path: item.path,
+        });
+
+        if (
+          !Array.isArray(fileData) &&
+          fileData.type === "file" &&
+          fileData.content
+        ) {
           files.push({
             path: item.path,
             content: Buffer.from(fileData.content, "base64").toString("utf-8"),
           });
         }
+      } catch (err) {
+        console.warn(`Failed to fetch file content for ${item.path}:`, err);
       }
     } else if (item.type === "dir") {
-      const subFiles = await getRepoFileContent(token, owner, repo, item.path);
-      files = files.concat(subFiles);
+      const dirName = item.name || item.path.split("/").pop() || "";
+      if (IGNORED_DIRS.has(dirName)) {
+        continue;
+      }
+
+      try {
+        const subFiles = await getRepoFileContent(token, owner, repo, item.path);
+        files = files.concat(subFiles);
+      } catch (err) {
+        console.warn(`Failed to fetch directory ${item.path}:`, err);
+      }
     }
   }
 
@@ -242,8 +276,8 @@ export async function getPullRequestDiff(
   });
 
   return {
-    diff: diff as unknown as string,
-    title: pr.title,
+    diff: typeof diff === "string" ? diff : String(diff || ""),
+    title: pr.title || `PR #${prNumber}`,
     description: pr.body || "",
   };
 }
@@ -261,6 +295,6 @@ export async function postReviewComment(
     owner,
     repo,
     issue_number: prNumber,
-    body: `## Code Review By AI \n\n ${review} \n\n\n *This comment has been written by AI from RepoPilot Team.*`,
+    body: `## 🤖 AI Code Review\n\n${review}\n\n---\n*Automated review powered by RepoPilot AI.*`,
   });
 }

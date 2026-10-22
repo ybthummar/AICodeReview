@@ -17,10 +17,10 @@ interface TierInfo {
 const TIERS: Record<string, TierInfo> = {
   FREE: {
     name: "FREE",
-    price: "$0",
+    price: "₹0",
     description: "Perfect for getting started",
     features: [
-      "5 repositories",
+      "1 connected repository",
       "Basic PR reviews",
       "Standard processing",
       "Community support",
@@ -28,7 +28,7 @@ const TIERS: Record<string, TierInfo> = {
   },
   PRO: {
     name: "PRO",
-    price: "$15",
+    price: "₹149",
     description: "For power users",
     features: [
       "Unlimited repositories",
@@ -126,8 +126,32 @@ function SubscriptionPage() {
         theme: {
           color: "#2563eb",
         },
-        handler: () => {
-          window.location.href = `${window.location.origin}/dashboard?payment=success`;
+        handler: async (response: any) => {
+          try {
+            setLoading(true);
+            const verifyRes = await fetch("/api/razorpay/verify", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+              }),
+            });
+
+            if (!verifyRes.ok) {
+              const errData = await verifyRes.json();
+              throw new Error(errData?.error || "Payment verification failed");
+            }
+
+            setCurrentTier("PRO");
+            window.location.href = `${window.location.origin}/dashboard/subscriptions?payment=success`;
+          } catch (verifyErr: any) {
+            console.error("Verification error:", verifyErr);
+            setError(verifyErr.message || "Failed to verify payment with server");
+          } finally {
+            setLoading(false);
+          }
         },
         modal: {
           ondismiss: () => {
@@ -161,7 +185,7 @@ function SubscriptionPage() {
                 <div className="mb-6">
                   <Skeleton className="h-8 w-32 mb-2" />
                   <Skeleton className="h-4 w-48 mb-4" />
-                  <div className="flex items-baseline gap-1">
+                  <div className="flex items-baseline gap-1 pb-1">
                     <Skeleton className="h-10 w-24" />
                     <Skeleton className="h-5 w-16" />
                   </div>
@@ -211,7 +235,7 @@ function SubscriptionPage() {
                 key={tier.name}
                 className={`relative border rounded-lg p-6 transition-all ${
                   isCurrentPlan
-                    ? "text-black shadow-xl border-2 border-blue-700 shadow-blue-500"
+                    ? "text-black shadow-lg border-2 border-blue-600 shadow-blue-100"
                     : "hover:border-blue-700"
                 }`}
               >
@@ -223,12 +247,12 @@ function SubscriptionPage() {
 
                 {/* Tier Info */}
                 <div className="mb-6">
-                  <h2 className="text-2xl font-bold mb-2">{tier.name} Plan</h2>
+                  <h2 className="text-2xl font-bold mb-2 pb-1 leading-tight">{tier.name} Plan</h2>
                   <p className="text-zinc-500 text-sm mb-4">
                     {tier.description}
                   </p>
                   <div className="flex items-baseline gap-1">
-                    <span className="text-4xl font-bold">{tier.price}</span>
+                    <span className="text-4xl font-bold leading-normal">{tier.price}</span>
                     {!isFree && <span className="text-zinc-500">/month</span>}
                   </div>
                 </div>

@@ -5,24 +5,19 @@ import RepositoryList from "@/module/settings/components/repositories-list";
 
 function SettingsPage() {
   return (
-    <div className="min-h-screen bg-white">
-      <div className="p-4 sm:px-6 lg:px-3">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold tracking-tight text-gray-900">
-            Settings
-          </h1>
-          <p className="text-gray-600 mt-1">
-            Manage your account and repositories
-          </p>
-        </div>
+    <div className="min-h-screen px-2 sm:px-6 lg:px-8 py-4 max-w-7xl mx-auto space-y-6">
+      <div className="pb-3 border-b border-slate-200/70">
+        <h1 className="text-3xl font-bold tracking-tight text-slate-900 pb-0.5">
+          Account Settings
+        </h1>
+        <p className="text-sm text-slate-500 mt-1">
+          Manage your personal developer profile, linked GitHub access, and connected code repositories.
+        </p>
+      </div>
 
-        <div className="mb-5">
-          <ProfilePage />
-        </div>
-
-        <div>
-          <RepositoryList />
-        </div>
+      <div className="space-y-6">
+        <ProfilePage />
+        <RepositoryList />
       </div>
     </div>
   );
