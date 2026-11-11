@@ -15,6 +15,8 @@ export default function LoginPage() {
     try {
       await signIn.social({
         provider: "github",
+        callbackURL: "/dashboard",
+        errorCallbackURL: "/login",
       });
     } catch (error) {
       console.error("Error during GitHub sign-in:", error);
