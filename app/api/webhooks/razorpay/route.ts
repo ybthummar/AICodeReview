@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "@/lib/db";
+import { activateProPayment } from "@/module/billing/lib/subscription";
 
 type RazorpayNotes = {
   userId?: string;
@@ -14,6 +14,8 @@ type RazorpayWebhookPayload = {
       entity?: {
         id?: string;
         order_id?: string;
+        amount?: number;
+        currency?: string;
         notes?: RazorpayNotes;
       };
     };
@@ -30,17 +32,30 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.text();
     const signature = req.headers.get("x-razorpay-signature");
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
-    if (signature && process.env.RAZORPAY_WEBHOOK_SECRET) {
-      const expectedSignature = crypto
-        .createHmac("sha256", process.env.RAZORPAY_WEBHOOK_SECRET)
-        .update(body)
-        .digest("hex");
+    // Without a verifiable signature anyone could upgrade any account, so reject.
+    if (!webhookSecret) {
+      console.error("RAZORPAY_WEBHOOK_SECRET is not configured; rejecting webhook");
+      return NextResponse.json({ error: "Webhook not configured" }, { status: 503 });
+    }
 
-      if (expectedSignature !== signature) {
-        console.error("Invalid Razorpay webhook signature");
-        return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
-      }
+    if (!signature) {
+      return NextResponse.json({ error: "Missing signature" }, { status: 400 });
+    }
+
+    const expectedSignature = crypto
+      .createHmac("sha256", webhookSecret)
+      .update(body)
+      .digest("hex");
+
+    const signatureMatches =
+      expectedSignature.length === signature.length &&
+      crypto.timingSafeEqual(Buffer.from(expectedSignature), Buffer.from(signature));
+
+    if (!signatureMatches) {
+      console.error("Invalid Razorpay webhook signature");
+      return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
     }
 
     let payload: RazorpayWebhookPayload;
@@ -53,22 +68,28 @@ export async function POST(req: NextRequest) {
     const event = payload.event;
     console.log(`Received Razorpay webhook event: ${event}`);
 
-    const paymentEntity = payload.payload?.payment?.entity;
-    const orderEntity = payload.payload?.order?.entity;
+    if (event !== "payment.captured" && event !== "order.paid") {
+      return NextResponse.json({ received: true });
+    }
 
-    const userId =
-      paymentEntity?.notes?.userId ||
-      orderEntity?.notes?.userId;
+    const payment = payload.payload?.payment?.entity;
+    const order = payload.payload?.order?.entity;
+    const userId = payment?.notes?.userId || order?.notes?.userId;
 
-    if (userId) {
-      await prisma.user.update({
-        where: { id: userId },
-        data: {
-          subscriptionTier: "PRO",
-          subscriptionStatus: "ACTIVE",
-        },
+    if (userId && payment?.id) {
+      const { applied, endsAt } = await activateProPayment({
+        userId,
+        paymentId: payment.id,
+        orderId: payment.order_id || order?.id || "unknown",
+        amount: payment.amount ?? 0,
+        currency: payment.currency || "INR",
       });
-      console.log(`Razorpay webhook activated PRO tier for user ${userId}`);
+
+      console.log(
+        applied
+          ? `Razorpay webhook activated PRO for user ${userId} until ${endsAt.toISOString()}`
+          : `Razorpay payment ${payment.id} was already applied`
+      );
     }
 
     return NextResponse.json({ received: true });

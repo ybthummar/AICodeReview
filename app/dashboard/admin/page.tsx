@@ -31,6 +31,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
+import { isProActive } from "@/lib/subscription";
 import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
 
@@ -249,9 +250,7 @@ export default function AdminPage() {
                 </tr>
               ) : (
                 filteredUsers.map((user) => {
-                  const isUserPro =
-                    user.subscriptionTier === "PRO" &&
-                    user.subscriptionStatus === "ACTIVE";
+                  const isUserPro = isProActive(user);
                   const isUpdating = updatingUserId === user.id;
 
                   return (
@@ -290,7 +289,10 @@ export default function AdminPage() {
                           </Badge>
                         ) : isUserPro ? (
                           <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 font-semibold text-xs flex items-center gap-1 w-fit">
-                            <CheckCircle2 className="w-3 h-3" /> PRO (Active)
+                            <CheckCircle2 className="w-3 h-3" /> PRO{" "}
+                            {user.subscriptionEndsAt
+                              ? `until ${new Date(user.subscriptionEndsAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+                              : "(Active)"}
                           </Badge>
                         ) : (
                           <Badge variant="outline" className="text-slate-600 border-slate-300 text-xs">

@@ -45,23 +45,35 @@ import {
   FileCode,
   ArrowRight,
   Zap,
+  Wrench,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getReviews,
   getConnectedReposPullRequests,
+  getMyFeedback,
   getRepoPullRequests,
   triggerManualReview,
   type ConnectedRepoPR,
 } from "@/module/review/actions";
 import { getConnectedRepositories } from "@/module/settings/actions";
+import { InsightsPanel, RiskBadge, VerdictBadge } from "@/module/review/components/insights-panel";
+import UsageMeter, { USAGE_QUERY_KEY } from "@/module/billing/components/usage-meter";
+import Link from "next/link";
+import {
+  parseReviewContent,
+  VERDICT_LABELS,
+  VERDICTS,
+  type ReviewVerdict,
+} from "@/module/review/lib/insights";
 import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 import type { Review, ReviewCardProps } from "@/types/review/types";
 
-const ReviewCard: React.FC<ReviewCardProps> = ({ review }) => {
+const ReviewCard: React.FC<ReviewCardProps> = ({ review, votes }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const parsed = useMemo(() => parseReviewContent(review.review), [review.review]);
 
   const statusConfig = {
     completed: {
@@ -100,7 +112,7 @@ const ReviewCard: React.FC<ReviewCardProps> = ({ review }) => {
   });
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(review.review);
+    navigator.clipboard.writeText(parsed.markdown);
     setCopied(true);
     toast.success("Review copied to clipboard");
     setTimeout(() => setCopied(false), 2000);
@@ -129,6 +141,12 @@ const ReviewCard: React.FC<ReviewCardProps> = ({ review }) => {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {review.status === "completed" && parsed.insights && (
+              <>
+                <VerdictBadge verdict={parsed.insights.verdict} />
+                <RiskBadge level={parsed.insights.riskLevel} score={parsed.insights.riskScore} />
+              </>
+            )}
             <Badge className={`font-semibold flex items-center ${config.color}`}>
               <Icon className={`w-3.5 h-3.5 mr-1 ${review.status === "pending" ? "animate-spin" : ""}`} />
               {config.text}
@@ -160,6 +178,15 @@ const ReviewCard: React.FC<ReviewCardProps> = ({ review }) => {
       </CardHeader>
 
       <CardContent className="px-4 sm:px-6 pt-4">
+        {review.status === "completed" && parsed.insights && (
+          <InsightsPanel
+            insights={parsed.insights}
+            reviewId={review.id}
+            canEdit={review.canEdit !== false}
+            votes={votes}
+          />
+        )}
+
         <div className="flex items-center justify-between mb-3">
           <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
             <Sparkles className="w-3.5 h-3.5 text-blue-600" /> AI Review Findings
@@ -256,13 +283,15 @@ const ReviewCard: React.FC<ReviewCardProps> = ({ review }) => {
                     </blockquote>
                   ),
                   hr: () => <hr className="my-4 border-slate-200" />,
+                  pre: ({ children }) => <>{children}</>,
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  code({ inline, className, children, ...props }: any) {
+                  code({ className, children, ...props }: any) {
                     const match = /language-(\w+)/.exec(className || "");
-                    return !inline && match ? (
+                    const isBlock = Boolean(match) || String(children).includes("\n");
+                    return isBlock ? (
                       <div className="relative my-3 rounded-lg overflow-hidden border border-slate-800 bg-slate-950">
                         <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900 text-xs text-slate-400 font-mono border-b border-slate-800">
-                          <span>{match[1]}</span>
+                          <span>{match ? match[1] : "code"}</span>
                         </div>
                         <pre className="p-3 text-xs sm:text-sm font-mono text-slate-100 overflow-x-auto leading-relaxed">
                           <code className={className} {...props}>
@@ -281,7 +310,7 @@ const ReviewCard: React.FC<ReviewCardProps> = ({ review }) => {
                   },
                 }}
               >
-                {review.review}
+                {parsed.markdown}
               </ReactMarkdown>
             </div>
 
@@ -326,6 +355,7 @@ export default function ReviewPage() {
   const [activeTab, setActiveTab] = useState<"prs" | "reports">("prs");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedRepoFilter, setSelectedRepoFilter] = useState<string>("all");
+  const [verdictFilter, setVerdictFilter] = useState<ReviewVerdict | "all">("all");
 
   // Manual Review Dialog states
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -391,6 +421,29 @@ export default function ReviewPage() {
   const prList = useMemo(() => pullRequests || [], [pullRequests]);
   const reviewList = useMemo(() => reviews || [], [reviews]);
 
+  // 5. The signed-in user's finding votes for the completed reviews on screen
+  const completedReviewIds = useMemo(
+    () => reviewList.filter((r) => r.status === "completed").map((r) => r.id),
+    [reviewList]
+  );
+  const { data: myVotes } = useQuery({
+    queryKey: ["finding-votes", completedReviewIds.join(",")],
+    queryFn: async () => await getMyFeedback(completedReviewIds),
+    enabled: completedReviewIds.length > 0,
+    staleTime: 1000 * 60,
+  });
+
+  const votesByReview = useMemo(() => {
+    const grouped: Record<string, Record<string, "up" | "down">> = {};
+    for (const [key, vote] of Object.entries(myVotes ?? {})) {
+      const separator = key.indexOf(":");
+      if (separator < 0) continue;
+      const reviewId = key.slice(0, separator);
+      (grouped[reviewId] ??= {})[key.slice(separator + 1)] = vote;
+    }
+    return grouped;
+  }, [myVotes]);
+
   // Count open PRs needing review
   const openNeedsReviewCount = useMemo(() => {
     return prList.filter((pr) => pr.state === "open" && !pr.hasReview).length;
@@ -433,9 +486,12 @@ export default function ReviewPage() {
         r.prTitle.toLowerCase().includes(q) ||
         r.repository.fullName.toLowerCase().includes(q) ||
         `#${r.prNumber}`.includes(q);
-      return matchesRepo && matchesSearch;
+      const matchesVerdict =
+        verdictFilter === "all" ||
+        parseReviewContent(r.review).insights?.verdict === verdictFilter;
+      return matchesRepo && matchesSearch && matchesVerdict;
     });
-  }, [reviewList, selectedRepoFilter, searchQuery]);
+  }, [reviewList, selectedRepoFilter, searchQuery, verdictFilter]);
 
   // Refresh both PRs and Reviews
   const handleRefreshAll = async () => {
@@ -457,12 +513,19 @@ export default function ReviewPage() {
         description: "Pulling diff, matching code symbols, and generating structured feedback.",
       });
 
-      await triggerManualReview(owner, repo, prNumber);
+      const result = await triggerManualReview(owner, repo, prNumber);
+
+      if (!result.ok) {
+        toast.error(result.error);
+        return;
+      }
 
       toast.success(`AI Review completed for ${owner}/${repo}#${prNumber}!`);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["reviews"] }),
         queryClient.invalidateQueries({ queryKey: ["connected-repos-prs"] }),
+        queryClient.invalidateQueries({ queryKey: ["review-insights-overview"] }),
+        queryClient.invalidateQueries({ queryKey: USAGE_QUERY_KEY }),
       ]);
       setActiveTab("reports");
     } catch (err) {
@@ -494,7 +557,13 @@ export default function ReviewPage() {
     setIsTriggering(true);
     try {
       toast.info(`Reviewing ${owner}/${repo}#${prNum} with AI & RAG...`);
-      await triggerManualReview(owner, repo, prNum);
+      const result = await triggerManualReview(owner, repo, prNum);
+
+      if (!result.ok) {
+        toast.error(result.error);
+        return;
+      }
+
       toast.success(`Review completed for PR #${prNum}!`);
       setDialogOpen(false);
       setSelectedRepoFullName("");
@@ -503,6 +572,8 @@ export default function ReviewPage() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["reviews"] }),
         queryClient.invalidateQueries({ queryKey: ["connected-repos-prs"] }),
+        queryClient.invalidateQueries({ queryKey: ["review-insights-overview"] }),
+        queryClient.invalidateQueries({ queryKey: USAGE_QUERY_KEY }),
       ]);
       setActiveTab("reports");
     } catch (err) {
@@ -529,6 +600,7 @@ export default function ReviewPage() {
         </div>
 
         <div className="flex items-center gap-2.5 flex-wrap">
+          <UsageMeter compact />
           <Button
             variant="outline"
             size="sm"
@@ -768,6 +840,21 @@ export default function ReviewPage() {
             </div>
           )}
 
+          {activeTab === "reports" && (
+            <select
+              value={verdictFilter}
+              onChange={(e) => setVerdictFilter(e.target.value as ReviewVerdict | "all")}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 shadow-sm"
+            >
+              <option value="all">All verdicts</option>
+              {VERDICTS.map((v) => (
+                <option key={v} value={v}>
+                  {VERDICT_LABELS[v]}
+                </option>
+              ))}
+            </select>
+          )}
+
           <div className="relative min-w-[220px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <Input
@@ -927,9 +1014,9 @@ export default function ReviewPage() {
                               variant="ghost"
                               size="sm"
                               onClick={() => handleRunReview(pr.repoOwner, pr.repoName, pr.number)}
-                              disabled={isPRRunning}
+                              disabled={isPRRunning || !pr.canReview}
                               className="text-xs h-8 text-slate-600 hover:text-slate-900"
-                              title="Re-run AI Review"
+                              title={pr.canReview ? "Re-run AI Review" : "You have view-only access to this repository"}
                             >
                               {isPRRunning ? (
                                 <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
@@ -942,7 +1029,8 @@ export default function ReviewPage() {
                           <Button
                             size="sm"
                             onClick={() => handleRunReview(pr.repoOwner, pr.repoName, pr.number)}
-                            disabled={isPRRunning}
+                            disabled={isPRRunning || !pr.canReview}
+                            title={pr.canReview ? undefined : "You have view-only access to this repository"}
                             className="bg-blue-600 hover:bg-blue-700 text-white text-xs h-8 font-semibold shadow-sm flex items-center gap-1.5"
                           >
                             {isPRRunning ? (
@@ -958,6 +1046,18 @@ export default function ReviewPage() {
                             )}
                           </Button>
                         )}
+
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          asChild
+                          className="h-8 w-8 text-slate-500 hover:text-slate-900"
+                          title="AI Toolkit: PR description, tests, security scan"
+                        >
+                          <Link href={`/dashboard/toolkit?repo=${pr.repositoryId}&pr=${pr.number}`}>
+                            <Wrench className="w-4 h-4" />
+                          </Link>
+                        </Button>
 
                         <Button
                           variant="ghost"
@@ -1014,7 +1114,7 @@ export default function ReviewPage() {
           ) : (
             <div className="space-y-6">
               {filteredReviews.map((review) => (
-                <ReviewCard key={review.id} review={review} />
+                <ReviewCard key={review.id} review={review} votes={votesByReview[review.id]} />
               ))}
             </div>
           )}

@@ -4,6 +4,7 @@ import { indexRepo } from "@/inngest/functions";
 import { generateReview } from "@/inngest/functions/review";
 import { scheduleRepoSummaries } from "@/inngest/functions/weekly-cron-function";
 import { repoWeeklySummary } from "@/inngest/functions/repo-weekly-summary";
+import { subscriptionMaintenance } from "@/inngest/functions/subscription-cron";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -12,5 +13,6 @@ export const { GET, POST, PUT } = serve({
     generateReview,
     scheduleRepoSummaries,
     repoWeeklySummary,
+    subscriptionMaintenance,
   ],
 });

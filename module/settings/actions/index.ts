@@ -5,6 +5,8 @@ import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import prisma from "@/lib/db";
 import { deleteWebhook } from "@/module/github/lib/github";
+import { purgeRepositoryVectors } from "@/module/ai/lib/rag";
+import { recordAudit } from "@/module/audit/lib/audit";
 
 export async function getUserProfile() {
   try {
@@ -34,10 +36,12 @@ export async function getUserProfile() {
   }
 }
 
-export async function updateUserProfile(data: {
-  name?: string;
-  email?: string;
-}) {
+// Email is owned by the GitHub login and drives admin checks, so only the display name is editable.
+export async function updateUserProfile(data: { name?: string }): Promise<{
+  success: boolean;
+  error?: string;
+  user?: { id: string; name: string; email: string };
+}> {
   try {
     const session = await auth.api.getSession({
       headers: await headers(),
@@ -47,12 +51,17 @@ export async function updateUserProfile(data: {
       throw new Error("Unauthorized");
     }
 
+    const name = data.name?.trim() ?? "";
+    if (name.length < 1 || name.length > 80) {
+      return {
+        success: false,
+        error: "Display name must be between 1 and 80 characters",
+      };
+    }
+
     const updatedUser = await prisma.user.update({
       where: { id: session.user.id },
-      data: {
-        name: data.name,
-        email: data.email,
-      },
+      data: { name },
       select: {
         id: true,
         name: true,
@@ -128,12 +137,21 @@ export async function disconnectRepository(repositoryId: string) {
     }
 
     await deleteWebhook(repository.owner, repository.name);
+    await purgeRepositoryVectors(repository.fullName);
 
     await prisma.repository.delete({
       where: {
         id: repositoryId,
         userId: session.user.id,
       },
+    });
+
+    await recordAudit({
+      userId: session.user.id,
+      action: "repository.disconnected",
+      targetType: "repository",
+      targetId: repository.id,
+      summary: `Disconnected ${repository.fullName}`,
     });
 
     revalidatePath("/dashboard/settings", "page");
@@ -165,6 +183,7 @@ export async function dissconnectAllRepository() {
     await Promise.all(
       repositories.map(async (repo) => {
         await deleteWebhook(repo.owner, repo.name);
+        await purgeRepositoryVectors(repo.fullName);
       })
     );
 
@@ -172,6 +191,12 @@ export async function dissconnectAllRepository() {
       where: {
         userId: session.user.id,
       },
+    });
+
+    await recordAudit({
+      userId: session.user.id,
+      action: "repository.disconnected",
+      summary: `Disconnected all ${repositories.length} repositories`,
     });
 
     revalidatePath("/dashboard/settings", "page");

@@ -35,6 +35,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useState } from "react";
+import RulesDialog from "@/module/review-rules/components/rules-dialog";
 
 interface Repository {
   id: string;
@@ -73,6 +74,7 @@ const RepoCard: React.FC<RepoCardProps> = ({
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <RulesDialog repositoryId={repo.id} repositoryName={repo.fullName} />
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button
@@ -185,8 +187,8 @@ function RepositoryList() {
             <CardTitle className="text-xl">Connected Repositories</CardTitle>
             <CardDescription>
               {repoArray.length > 0
-                ? `${repoArray.length} repository${
-                    repoArray.length !== 1 ? "ies" : ""
+                ? `${repoArray.length} ${
+                    repoArray.length !== 1 ? "repositories" : "repository"
                   } connected`
                 : "No repositories connected yet"}
             </CardDescription>

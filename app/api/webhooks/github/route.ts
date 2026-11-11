@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { reviewPullRequest } from "@/module/ai/actions/index";
+import { handleCommentEvent, handleInstallationEvent } from "@/module/github/lib/commands";
 
 function verifyGitHubSignature(
   payload: string,
@@ -23,12 +24,14 @@ function verifyGitHubSignature(
   }
 }
 
+const REVIEW_ACTIONS = new Set(["opened", "synchronize", "reopened", "ready_for_review"]);
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.text();
     const event = req.headers.get("x-github-event");
 
-    // Verify webhook signature ONLY if secret is configured in .env
+    // Verify the webhook signature whenever a secret is configured.
     const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
     if (webhookSecret) {
       const signature = req.headers.get("x-hub-signature-256");
@@ -47,6 +50,38 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ message: "Pong" }, { status: 200 });
     }
 
+    // Commands can modify pull requests, so they are only trusted when deliveries are signed.
+    if (event === "issue_comment" || event === "pull_request_review_comment") {
+      if (!webhookSecret) {
+        console.warn("Ignoring slash command: GITHUB_WEBHOOK_SECRET is not configured");
+        return NextResponse.json({ message: "Commands require a webhook secret" }, { status: 202 });
+      }
+
+      after(async () => {
+        try {
+          await handleCommentEvent(event, parsed);
+        } catch (error) {
+          console.error("Comment event failed:", error);
+        }
+      });
+
+      return NextResponse.json({ message: "Event Processed" }, { status: 200 });
+    }
+
+    if (event === "installation") {
+      if (webhookSecret) {
+        after(async () => {
+          try {
+            await handleInstallationEvent(parsed);
+          } catch (error) {
+            console.error("Installation event failed:", error);
+          }
+        });
+      }
+
+      return NextResponse.json({ message: "Event Processed" }, { status: 200 });
+    }
+
     if (event === "pull_request") {
       const action = parsed.action;
       const repo = parsed.repository?.full_name;
@@ -61,22 +96,18 @@ export async function POST(req: NextRequest) {
 
       const [owner, repoName] = repo.split("/");
 
-      if (
-        action === "opened" ||
-        action === "synchronize" ||
-        action === "reopened" ||
-        action === "ready_for_review"
-      ) {
+      if (REVIEW_ACTIONS.has(action)) {
         console.log(`Received GitHub webhook for ${action} PR ${repo}#${prNumber}`);
 
-        // Fire and forget: trigger review without keeping the webhook request hanging
-        reviewPullRequest(owner, repoName, prNumber)
-          .then(() => {
-            console.log(`Review process initiated for ${repo}/#${prNumber}`);
-          })
-          .catch((err: Error) => {
-            console.error(`Review process error for ${repo}/#${prNumber}:`, err);
-          });
+        // Respond immediately; the review continues after the response is sent.
+        after(async () => {
+          try {
+            const result = await reviewPullRequest(owner, repoName, prNumber, { source: "webhook" });
+            console.log(`Review process for ${repo}#${prNumber}: ${result.message}`);
+          } catch (err) {
+            console.error(`Review process error for ${repo}#${prNumber}:`, err);
+          }
+        });
       }
     }
 

@@ -1,0 +1,58 @@
+{
+  "name": "repopilot",
+  "displayName": "RepoPilot",
+  "description": "Review your uncommitted changes with RepoPilot before you push. Findings appear in the Problems panel.",
+  "version": "1.0.0",
+  "publisher": "repopilot",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Other"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "repopilot.reviewChanges",
+        "title": "RepoPilot: Review Uncommitted Changes"
+      },
+      {
+        "command": "repopilot.reviewStaged",
+        "title": "RepoPilot: Review Staged Changes"
+      },
+      {
+        "command": "repopilot.setApiKey",
+        "title": "RepoPilot: Set API Key"
+      },
+      {
+        "command": "repopilot.clearFindings",
+        "title": "RepoPilot: Clear Findings"
+      }
+    ],
+    "configuration": {
+      "title": "RepoPilot",
+      "properties": {
+        "repopilot.serverUrl": {
+          "type": "string",
+          "default": "http://localhost:3000",
+          "description": "Address of your RepoPilot server."
+        },
+        "repopilot.strictness": {
+          "type": "string",
+          "enum": [
+            "lenient",
+            "balanced",
+            "strict"
+          ],
+          "default": "balanced",
+          "description": "How strict the AI review should be."
+        }
+      }
+    }
+  }
+}

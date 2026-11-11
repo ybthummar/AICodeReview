@@ -1,56 +1,77 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { inngest } from "../client";
-import {
-  getPullRequestDiff,
-  postReviewComment,
-} from "@/module/github/lib/github";
+import { getPullRequestDiff } from "@/module/github/lib/github";
 import { retrieveContext } from "@/module/ai/lib/rag";
-import { generateText } from "ai";
-import { google } from "@ai-sdk/google";
+import { generateStructuredReview } from "@/module/ai/lib/review-generator";
+import {
+  finalizeInsights,
+  loadPreviousInsights,
+  MAX_STORED_DIFF_CHARS,
+  notifyReviewCompleted,
+  postInlineFindings,
+  postMainComment,
+  prepareDiff,
+  publishQualityGate,
+} from "@/module/review/lib/pipeline";
+import { serializeReviewContent } from "@/module/review/lib/insights";
+import { loadReviewConfig } from "@/module/review-rules/lib/load";
+import { refundUsage } from "@/module/billing/lib/usage";
+import { resolveReviewToken } from "@/module/team/lib/access";
 import prisma from "@/lib/db";
 import type { ASTSymbolContext } from "@/types/review/types";
 
-function formatASTContext(symbols: any[]) {
-  if (!symbols || symbols.length === 0) return "";
+const PENDING_TEXT =
+  "AI Review in progress... Analyzing code changes and repository context.";
 
-  return symbols
-    .slice(0, 5)
-    .map((s) => {
-      if (s.type === "symbol" || s.symbolName) {
-        return `File: ${s.path} | Symbol: ${s.symbolName ?? "unknown"} (${s.symbolType ?? "unknown"}) | Lines: ${s.startLine ?? "?"}-${s.endLine ?? "?"}`;
-      } else if (s.content) {
-        return `File: ${s.path}\nSnippet:\n${s.content.slice(0, 300)}`;
-      }
-      return `File: ${s.path}`;
-    })
-    .join("\n\n");
-}
+async function retrieveAstContext(
+  owner: string,
+  repo: string,
+  title: string,
+  description: string,
+  diff: string
+): Promise<ASTSymbolContext[]> {
+  const query = `PR Title: ${title}\nPR Description: ${description || ""}\nDiff:\n${diff.slice(0, 1500)}`.trim();
 
-async function generateFastReviewText(prompt: string): Promise<string> {
-  const modelsToTry = [
-    "gemini-flash-lite-latest",
-    "gemini-flash-latest",
-    "gemini-3.5-flash",
-  ];
-
-  let lastError: unknown;
-  for (const modelName of modelsToTry) {
-    try {
-      const { text } = await generateText({
-        model: google(modelName),
-        prompt,
-      });
-      return text;
-    } catch (err) {
-      console.warn(`Model ${modelName} failed or busy, trying fallback...`);
-      lastError = err;
-    }
+  // Pinecone must never block the review, so retrieval is capped at 2.5 seconds.
+  try {
+    const search = retrieveContext(query, `${owner}/${repo}`, 5) as Promise<ASTSymbolContext[]>;
+    const timeout = new Promise<ASTSymbolContext[]>((resolve) =>
+      setTimeout(() => resolve([]), 2500)
+    );
+    return await Promise.race([search, timeout]);
+  } catch (err) {
+    console.warn("Context retrieval bypassed:", err);
+    return [];
   }
-
-  throw lastError;
 }
 
+async function sendReviewEmail(
+  userId: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  prTitle: string,
+  markdown: string
+) {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true },
+    });
 
+    if (user?.email) {
+      const { sendReviewNotificationEmail } = await import("@/lib/mail");
+      await sendReviewNotificationEmail({
+        to: user.email,
+        repoName: `${owner}/${repo}`,
+        prNumber,
+        prTitle,
+        reviewSnippet: markdown,
+      });
+    }
+  } catch (mailErr) {
+    console.warn("Review notification email skipped:", mailErr);
+  }
+}
 
 export async function performDirectReview({
   owner,
@@ -63,7 +84,7 @@ export async function performDirectReview({
   prNumber: number;
   userId: string;
 }) {
-  console.log(`Starting lightning direct PR review for ${owner}/${repo}#${prNumber}`);
+  console.log(`Starting direct PR review for ${owner}/${repo}#${prNumber}`);
 
   const repository = await prisma.repository.findFirst({
     where: {
@@ -76,12 +97,8 @@ export async function performDirectReview({
     throw new Error(`Repository ${owner}/${repo} not found in database`);
   }
 
-  // Ensure an existing review record exists in DB with 'pending'
   const existingReview = await prisma.review.findFirst({
-    where: {
-      repositoryId: repository.id,
-      prNumber,
-    },
+    where: { repositoryId: repository.id, prNumber },
     orderBy: { createdAt: "desc" },
   });
 
@@ -94,178 +111,103 @@ export async function performDirectReview({
         prNumber,
         prTitle: `PR #${prNumber}`,
         prUrl: `https://github.com/${owner}/${repo}/pull/${prNumber}`,
-        review: "AI Review in progress... Analyzing code changes and repository context.",
+        review: PENDING_TEXT,
         status: "pending",
       },
     });
     reviewRecordId = created.id;
-  } else if (existingReview?.status !== "completed") {
+  } else {
+    // A completed review keeps its text so finding history can be carried into the new run.
     await prisma.review.update({
       where: { id: reviewRecordId },
       data: {
         status: "pending",
-        review: "AI Review in progress... Analyzing code changes and repository context.",
+        ...(existingReview?.status === "completed" ? {} : { review: PENDING_TEXT }),
       },
     });
   }
 
   try {
-    const account = await prisma.account.findFirst({
-      where: {
-        userId,
-        providerId: "github",
-      },
-    });
-
-    let token = account?.accessToken;
-    if (!token) {
-      // Prioritize admin account with verified active token
-      const adminAcc = await prisma.account.findFirst({
-        where: {
-          providerId: "github",
-          accessToken: { not: null },
-          user: { email: "yugthummar001@gmail.com" },
-        },
-      });
-      token = adminAcc?.accessToken || undefined;
-
-      if (!token) {
-        const fallback = await prisma.account.findFirst({
-          where: {
-            providerId: "github",
-            accessToken: { not: null },
-          },
-        });
-        token = fallback?.accessToken || undefined;
-      }
-    }
-
+    const token = await resolveReviewToken(userId, owner);
     if (!token) {
       throw new Error("No GitHub access token found for user or admin");
     }
 
-    const { diff, title, description, headRef, baseRef, filesSummary, commitsSummary } = await getPullRequestDiff(
+    const config = await loadReviewConfig(repository.id);
+    const pr = await getPullRequestDiff(token, owner, repo, prNumber);
+
+    await prisma.review.update({
+      where: { id: reviewRecordId },
+      data: { prTitle: pr.title },
+    });
+
+    const prepared = prepareDiff(pr.diff, config);
+    const [previous, astContext] = await Promise.all([
+      loadPreviousInsights(repository.id, prNumber),
+      retrieveAstContext(owner, repo, pr.title, pr.description, prepared.diff),
+    ]);
+
+    const generated = await generateStructuredReview({
+      owner,
+      repo,
+      prNumber,
+      title: pr.title,
+      description: pr.description,
+      headRef: pr.headRef,
+      baseRef: pr.baseRef,
+      commitsSummary: pr.commitsSummary,
+      filesSummary: pr.filesSummary,
+      diff: prepared.diff,
+      astContext,
+      config,
+    });
+
+    const insights = await finalizeInsights({
+      insights: generated.insights,
+      files: prepared.files,
+      scanFiles: prepared.allFiles,
+      config,
+      previous,
+      headSha: pr.headSha,
+      repositoryId: repository.id,
+    });
+
+    try {
+      await postMainComment(token, owner, repo, prNumber, generated.markdown, insights);
+    } catch (err) {
+      console.error(`Failed to post comment to GitHub for ${owner}/${repo}#${prNumber}:`, err);
+    }
+
+    await postInlineFindings({
       token,
       owner,
       repo,
-      prNumber
-    );
-
-    // Update PR title in database immediately
-    await prisma.review.update({
-      where: { id: reviewRecordId },
-      data: { prTitle: title },
+      prNumber,
+      headSha: pr.headSha,
+      insights,
+      previous,
+      files: prepared.files,
+      config,
     });
+    await publishQualityGate(userId, token, owner, repo, pr.headSha, insights);
 
-    // Retrieve RAG context with a 2.5-second timeout so Pinecone never blocks the AI review
-    const query = `PR Title: ${title}\nPR Description: ${description || ""}\nDiff:\n${diff.slice(0, 1500)}`.trim();
-    let astContext: ASTSymbolContext[] = [];
-
-    try {
-      const astPromise = retrieveContext(query, `${owner}/${repo}`, 5) as Promise<ASTSymbolContext[]>;
-      const timeoutPromise = new Promise<ASTSymbolContext[]>((resolve) =>
-        setTimeout(() => resolve([]), 2500)
-      );
-      astContext = await Promise.race([astPromise, timeoutPromise]);
-    } catch (err) {
-      console.warn("Context retrieval bypassed:", err);
-    }
-
-    const formattedASTContext = formatASTContext(astContext);
-    const truncatedDiff =
-      diff.length > 20000
-        ? diff.slice(0, 20000) + "\n\n...[Diff truncated due to length]..."
-        : diff;
-
-    const prompt = `
-You are a senior software engineer performing a constructive, high-speed code review.
-
-PR METADATA:
-Repository: ${owner}/${repo}
-PR Number: #${prNumber}
-Title: ${title}
-Description: ${description || "No description provided"}
-${headRef && baseRef ? `Branch Tracking: ${headRef} -> ${baseRef}` : ""}
-${commitsSummary ? `\nCOMMITS ON THIS PR:\n${commitsSummary}\n` : ""}
-${filesSummary ? `\nFILES CHANGED:\n${filesSummary}\n` : ""}
-
-RELEVANT CODE CONTEXT:
-${formattedASTContext || "No indexed symbols"}
-
-DIFF / CODE CHANGES:
-${
-  truncatedDiff && truncatedDiff.trim().length > 0
-    ? `\`\`\`diff\n${truncatedDiff}\n\`\`\``
-    : "Note: Direct diff comparison shows 0 net file changes between source and target branches (e.g. reverse merge, branch sync, or fast-forward integration). Please evaluate the branch architecture, commit synchronization, and CI/CD workflow implications."
-}
-
-TASKS:
-1. **Summary**: What changed, architectural intent, and branch relationship (2-3 sentences).
-2. **Key Findings**: Architectural, logical, performance, or security observations. Use bullet points.
-3. **Suggestions**: Concrete code improvements, testing guidance, or branch hygiene recommendations.
-4. **Conclusion**: Concise verdict (Approve / Request Changes / Informational).
-
-Respond in clean, professional GitHub Markdown.
-    `;
-
-    // Generate review using the fastest active Gemini model
-    const review = await generateFastReviewText(prompt);
-
-    // Post comment to GitHub
-    try {
-      await postReviewComment(
-        token,
-        owner,
-        repo,
-        prNumber,
-        review
-      );
-    } catch (err) {
-      console.error(
-        `Failed to post comment to GitHub for ${owner}/${repo}#${prNumber}:`,
-        err
-      );
-    }
-
-    // Save completed review to the database
     await prisma.review.update({
       where: { id: reviewRecordId },
       data: {
-        prTitle: title,
-        review,
+        prTitle: pr.title,
+        review: serializeReviewContent(generated.markdown, insights),
         status: "completed",
       },
     });
 
-    // Notify user via email
-    try {
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { email: true },
-      });
-      if (user?.email) {
-        const { sendReviewNotificationEmail } = await import("@/lib/mail");
-        await sendReviewNotificationEmail({
-          to: user.email,
-          repoName: `${owner}/${repo}`,
-          prNumber,
-          prTitle: title,
-          reviewSnippet: review,
-        });
-      }
-    } catch (mailErr) {
-      console.warn("Review notification email skipped:", mailErr);
-    }
+    await sendReviewEmail(userId, owner, repo, prNumber, pr.title, generated.markdown);
+    await notifyReviewCompleted({ userId, owner, repo, prNumber, prTitle: pr.title, insights });
 
-    return { success: true, review };
+    return { success: true };
   } catch (error) {
-    console.error(
-      `Direct review execution failed for ${owner}/${repo}#${prNumber}:`,
-      error
-    );
+    console.error(`Direct review execution failed for ${owner}/${repo}#${prNumber}:`, error);
 
-    const errorMessage =
-      error instanceof Error ? error.message : "Review generation failed";
+    const errorMessage = error instanceof Error ? error.message : "Review generation failed";
 
     await prisma.review.update({
       where: { id: reviewRecordId },
@@ -274,168 +216,185 @@ Respond in clean, professional GitHub Markdown.
         status: "failed",
       },
     });
+    await refundUsage(repository.userId, "reviews");
 
     throw error;
   }
 }
 
 export const generateReview = inngest.createFunction(
-  { id: "generate-review", concurrency: 10 },
-  { event: "pr.review.requested" },
+  {
+    id: "generate-review",
+    concurrency: 10,
+    onFailure: async ({ event, error }) => {
+      const { owner, repo, prNumber } = event.data.event.data;
 
-  async ({ event, step }) => {
-    const { owner, repo, prNumber, userId } = event.data;
-
-    const { diff, title, description, token, headRef, baseRef, filesSummary, commitsSummary } = await step.run(
-      "fetch-pr-data",
-      async (): Promise<{ diff: string; title: string; description: string; token: string; headRef: string; baseRef: string; filesSummary: string; commitsSummary: string }> => {
-        const account = await prisma.account.findFirst({
-          where: {
-            userId,
-            providerId: "github",
-          },
-        });
-
-        let ghToken: string | null = account?.accessToken ?? null;
-        if (!ghToken) {
-          const adminAcc = await prisma.account.findFirst({
-            where: {
-              providerId: "github",
-              accessToken: { not: null },
-              user: { email: "yugthummar001@gmail.com" },
-            },
-          });
-          ghToken = adminAcc?.accessToken ?? null;
-        }
-
-        if (!ghToken) {
-          const fallback = await prisma.account.findFirst({
-            where: {
-              providerId: "github",
-              accessToken: { not: null },
-            },
-          });
-          ghToken = fallback?.accessToken ?? null;
-        }
-
-        if (!ghToken) {
-          throw new Error("No GitHub access token found");
-        }
-
-        const data = await getPullRequestDiff(
-          ghToken,
-          owner,
-          repo,
-          prNumber
-        );
-
-        return { ...data, token: ghToken };
-      }
-    );
-
-
-
-    const astContext = await step.run("retrieve-ast-context", async () => {
-      const query = `PR Title: ${title}\nPR Description: ${description || ""}\nDiff:\n${diff.slice(0, 1500)}`.trim();
-
-      try {
-        const astPromise = retrieveContext(query, `${owner}/${repo}`, 5) as Promise<ASTSymbolContext[]>;
-        const timeoutPromise = new Promise<ASTSymbolContext[]>((resolve) =>
-          setTimeout(() => resolve([]), 2500)
-        );
-        return await Promise.race([astPromise, timeoutPromise]);
-      } catch (err) {
-        console.warn("RAG retrieval skipped:", err);
-        return [] as ASTSymbolContext[];
-      }
-    });
-
-    const review = await step.run("generate-ai-review", async () => {
-      const formattedASTContext = formatASTContext(astContext);
-      const truncatedDiff =
-        diff.length > 20000
-          ? diff.slice(0, 20000) + "\n\n...[Diff truncated due to size]..."
-          : diff;
-
-      const prompt = `
-You are a senior software engineer performing a constructive, high-speed code review.
-
-PR METADATA:
-Repository: ${owner}/${repo}
-PR Number: #${prNumber}
-Title: ${title}
-Description: ${description || "No description provided"}
-${headRef && baseRef ? `Branch Tracking: ${headRef} -> ${baseRef}` : ""}
-${commitsSummary ? `\nCOMMITS ON THIS PR:\n${commitsSummary}\n` : ""}
-${filesSummary ? `\nFILES CHANGED:\n${filesSummary}\n` : ""}
-
-RELEVANT CODE CONTEXT:
-${formattedASTContext || "No indexed symbols"}
-
-DIFF / CODE CHANGES:
-${
-  truncatedDiff && truncatedDiff.trim().length > 0
-    ? `\`\`\`diff\n${truncatedDiff}\n\`\`\``
-    : "Note: Direct diff comparison shows 0 net file changes between source and target branches (e.g. reverse merge, branch sync, or fast-forward integration). Please evaluate the branch architecture, commit synchronization, and CI/CD workflow implications."
-}
-
-TASKS:
-1. **Summary**: What changed, architectural intent, and branch relationship (2-3 sentences).
-2. **Key Findings**: Architectural, logical, performance, or security observations. Use bullet points.
-3. **Suggestions**: Concrete code improvements, testing guidance, or branch hygiene recommendations.
-4. **Conclusion**: Concise verdict (Approve / Request Changes / Informational).
-
-Respond in clean, professional GitHub Markdown.
-      `;
-
-      return await generateFastReviewText(prompt);
-    });
-
-    await step.run("post-comment", async () => {
-      await postReviewComment(token, owner, repo, prNumber, review);
-    });
-
-    await step.run("save-review", async () => {
       const repository = await prisma.repository.findFirst({
         where: {
           owner: { equals: owner, mode: "insensitive" },
           name: { equals: repo, mode: "insensitive" },
         },
       });
+      if (!repository) return;
 
-      if (!repository) {
-        return;
+      const updated = await prisma.review.updateMany({
+        where: { repositoryId: repository.id, prNumber, status: "pending" },
+        data: {
+          review: `Error performing AI review: ${error.message}`,
+          status: "failed",
+        },
+      });
+
+      if (updated.count > 0) {
+        await refundUsage(repository.userId, "reviews");
+      }
+    },
+  },
+  { event: "pr.review.requested" },
+
+  async ({ event, step }) => {
+    const { owner, repo, prNumber, userId } = event.data;
+
+    // Tokens are resolved inside each step so they are never persisted in step output.
+    const pr = await step.run("fetch-pr-data", async () => {
+      const token = await resolveReviewToken(userId, owner);
+      if (!token) {
+        throw new Error("No GitHub access token found");
       }
 
-      const existing = await prisma.review.findFirst({
+      const repository = await prisma.repository.findFirst({
         where: {
-          repositoryId: repository.id,
-          prNumber,
+          owner: { equals: owner, mode: "insensitive" },
+          name: { equals: repo, mode: "insensitive" },
         },
+        select: { id: true },
+      });
+      if (!repository) {
+        throw new Error(`Repository ${owner}/${repo} not found in database`);
+      }
+
+      const [data, config] = await Promise.all([
+        getPullRequestDiff(token, owner, repo, prNumber),
+        loadReviewConfig(repository.id),
+      ]);
+
+      return {
+        ...data,
+        diff: data.diff.slice(0, MAX_STORED_DIFF_CHARS),
+        config,
+        repositoryId: repository.id,
+      };
+    });
+
+    const astContext = await step.run("retrieve-ast-context", async () => {
+      const prepared = prepareDiff(pr.diff, pr.config);
+      return await retrieveAstContext(owner, repo, pr.title, pr.description, prepared.diff);
+    });
+
+    const generated = await step.run("generate-ai-review", async () => {
+      const prepared = prepareDiff(pr.diff, pr.config);
+
+      return await generateStructuredReview({
+        owner,
+        repo,
+        prNumber,
+        title: pr.title,
+        description: pr.description,
+        headRef: pr.headRef,
+        baseRef: pr.baseRef,
+        commitsSummary: pr.commitsSummary,
+        filesSummary: pr.filesSummary,
+        diff: prepared.diff,
+        astContext,
+        config: pr.config,
+      });
+    });
+
+    const finalized = await step.run("finalize-insights", async () => {
+      const prepared = prepareDiff(pr.diff, pr.config);
+      const previous = await loadPreviousInsights(pr.repositoryId, prNumber);
+
+      const insights = await finalizeInsights({
+        insights: generated.insights,
+        files: prepared.files,
+        scanFiles: prepared.allFiles,
+        config: pr.config,
+        previous,
+        headSha: pr.headSha,
+        repositoryId: pr.repositoryId,
+      });
+
+      return { insights, previous };
+    });
+
+    await step.run("post-comment", async () => {
+      const token = await resolveReviewToken(userId, owner);
+      if (!token) throw new Error("No GitHub access token found");
+
+      await postMainComment(token, owner, repo, prNumber, generated.markdown, finalized.insights);
+    });
+
+    await step.run("post-inline-comments", async () => {
+      const token = await resolveReviewToken(userId, owner);
+      if (!token) return 0;
+
+      return await postInlineFindings({
+        token,
+        owner,
+        repo,
+        prNumber,
+        headSha: pr.headSha,
+        insights: finalized.insights,
+        previous: finalized.previous,
+        files: prepareDiff(pr.diff, pr.config).files,
+        config: pr.config,
+      });
+    });
+
+    await step.run("quality-gate", async () => {
+      const token = await resolveReviewToken(userId, owner);
+      if (!token) return;
+
+      await publishQualityGate(userId, token, owner, repo, pr.headSha, finalized.insights);
+    });
+
+    await step.run("save-review", async () => {
+      const review = serializeReviewContent(generated.markdown, finalized.insights);
+
+      const existing = await prisma.review.findFirst({
+        where: { repositoryId: pr.repositoryId, prNumber },
         orderBy: { createdAt: "desc" },
       });
 
       if (existing) {
         await prisma.review.update({
           where: { id: existing.id },
-          data: {
-            prTitle: title,
-            review,
-            status: "completed",
-          },
+          data: { prTitle: pr.title, review, status: "completed" },
         });
       } else {
         await prisma.review.create({
           data: {
-            repositoryId: repository.id,
+            repositoryId: pr.repositoryId,
             prNumber,
-            prTitle: title,
+            prTitle: pr.title,
             prUrl: `https://github.com/${owner}/${repo}/pull/${prNumber}`,
             review,
             status: "completed",
           },
         });
       }
+    });
+
+    await step.run("notify", async () => {
+      await sendReviewEmail(userId, owner, repo, prNumber, pr.title, generated.markdown);
+      await notifyReviewCompleted({
+        userId,
+        owner,
+        repo,
+        prNumber,
+        prTitle: pr.title,
+        insights: finalized.insights,
+      });
     });
 
     return { success: true };

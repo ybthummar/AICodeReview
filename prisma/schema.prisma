@@ -16,6 +16,7 @@ model User {
 
   subscriptionTier   String  @default("FREE")
   subscriptionStatus String?
+  subscriptionEndsAt DateTime?
 
   stripeCustomerId     String? @unique
   stripeSubscriptionId String? @unique
@@ -28,6 +29,15 @@ model User {
   accounts     Account[]
   repositories Repository[]
   userUsage    UserUsage?
+
+  ownedWorkspaces      Workspace[]           @relation("WorkspaceOwner")
+  workspaceMemberships WorkspaceMember[]
+  notificationChannels NotificationChannel[]
+  payments             Payment[]
+  findingFeedback      FindingFeedback[]
+  apiKeys              ApiKey[]
+  auditLogs            AuditLog[]
+  githubInstallations  GitHubInstallation[]
 }
 
 model UserUsage {
@@ -55,6 +65,9 @@ model Repository {
   updatedAt         DateTime           @updatedAt
   reviews           Review[]
   repositoryClients RepositoryClient[]
+  settings          RepositorySettings?
+  workspaceLink     WorkspaceRepository?
+  findingFeedback   FindingFeedback[]
 
   @@index([userId])
   @@map("repository")
@@ -144,5 +157,157 @@ model RepositoryClient {
   client     Client     @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@unique([repositoryId, clientId])
+}
+
+model RepositorySettings {
+  id           String     @id @default(cuid())
+  repositoryId String     @unique
+  repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  config       Json       @default("{}")
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@map("repository_settings")
+}
+
+model Workspace {
+  id           String                @id @default(cuid())
+  name         String
+  ownerId      String
+  owner        User                  @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+  members      WorkspaceMember[]
+  repositories WorkspaceRepository[]
+
+  @@index([ownerId])
+  @@map("workspace")
+}
+
+model WorkspaceMember {
+  id          String    @id @default(cuid())
+  workspaceId String
+  userId      String
+  // OWNER | ADMIN | MEMBER | VIEWER
+  role        String    @default("MEMBER")
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+  @@map("workspace_member")
+}
+
+model WorkspaceRepository {
+  id           String     @id @default(cuid())
+  workspaceId  String
+  repositoryId String     @unique
+  createdAt    DateTime   @default(now())
+  workspace    Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("workspace_repository")
+}
+
+model NotificationChannel {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // slack | discord | teams
+  kind      String
+  name      String
+  url       String
+  // all | risky | blocking
+  trigger   String   @default("risky")
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("notification_channel")
+}
+
+model Payment {
+  id           String   @id @default(cuid())
+  paymentId    String   @unique
+  orderId      String
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount       Int
+  currency     String
+  periodEndsAt DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@map("payment")
+}
+
+model FindingFeedback {
+  id           String     @id @default(cuid())
+  repositoryId String
+  repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  reviewId     String
+  findingId    String
+  category     String
+  severity     String
+  title        String
+  // up | down
+  vote         String
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@unique([reviewId, findingId, userId])
+  @@index([repositoryId, findingId])
+  @@map("finding_feedback")
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  prefix     String
+  keyHash    String    @unique
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@map("api_key")
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  workspaceId String?
+  action      String
+  targetType  String?
+  targetId    String?
+  summary     String
+  metadata    Json     @default("{}")
+  createdAt   DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@map("audit_log")
+}
+
+model GitHubInstallation {
+  id             String   @id @default(cuid())
+  installationId Int      @unique
+  accountLogin   String
+  accountType    String
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt      DateTime @default(now())
+
+  @@index([accountLogin])
+  @@index([userId])
+  @@map("github_installation")
 }
 

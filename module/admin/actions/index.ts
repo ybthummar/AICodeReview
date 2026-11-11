@@ -5,6 +5,7 @@ import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
 import { isAdminUser } from "@/lib/admin";
 import { revalidatePath } from "next/cache";
+import { recordAudit } from "@/module/audit/lib/audit";
 
 async function requireAdminSession() {
   const session = await auth.api.getSession({
@@ -47,6 +48,7 @@ export async function getAdminDashboardData() {
         where: {
           subscriptionTier: "PRO",
           subscriptionStatus: "ACTIVE",
+          OR: [{ subscriptionEndsAt: null }, { subscriptionEndsAt: { gt: new Date() } }],
         },
       }),
       prisma.user.findMany({
@@ -58,6 +60,7 @@ export async function getAdminDashboardData() {
           image: true,
           subscriptionTier: true,
           subscriptionStatus: true,
+          subscriptionEndsAt: true,
           createdAt: true,
           _count: {
             select: {
@@ -101,19 +104,36 @@ export async function adminUpdateUserSubscription(
   tier: "FREE" | "PRO" | "ADMIN",
   status: "ACTIVE" | "INACTIVE" | "CANCELLED"
 ) {
-  await requireAdminSession();
+  const session = await requireAdminSession();
 
   const updatedUser = await prisma.user.update({
     where: { id: userId },
     data: {
       subscriptionTier: tier,
       subscriptionStatus: status,
+      // Admin grants never expire on their own.
+      subscriptionEndsAt: null,
     },
+  });
+
+  await recordAudit({
+    userId: session.user.id,
+    action: "subscription.changed_by_admin",
+    targetType: "user",
+    targetId: userId,
+    summary: `Set ${updatedUser.email} to ${tier} (${status})`,
   });
 
   revalidatePath("/dashboard/admin");
   revalidatePath("/dashboard/subscriptions");
   revalidatePath("/dashboard");
 
-  return { success: true, user: updatedUser };
+  return {
+    success: true,
+    user: {
+      id: updatedUser.id,
+      subscriptionTier: updatedUser.subscriptionTier,
+      subscriptionStatus: updatedUser.subscriptionStatus,
+    },
+  };
 }

@@ -22,11 +22,16 @@ import {
   Crown,
   Rat,
   ChevronLeft,
+  Bot,
+  Wrench,
+  UsersRound,
+  BarChart3,
+  ClipboardList,
 } from "lucide-react";
 import Link from "next/link";
 import LogoutButton from "@/module/auth/components/logout";
 import { useEffect } from "react";
-import { getDashboardStats } from "@/module/dashboard/actions";
+import { getSubscriptionStatus } from "@/module/dashboard/actions";
 import {
   Tooltip,
   TooltipContent,
@@ -41,6 +46,11 @@ const baseNavigationItems = [
   { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { title: "Repositories", href: "/dashboard/repositories", icon: Github },
   { title: "Reviews", href: "/dashboard/reviews", icon: MessageSquareText },
+  { title: "Analytics", href: "/dashboard/analytics", icon: BarChart3 },
+  { title: "Ask Codebase", href: "/dashboard/chat", icon: Bot },
+  { title: "AI Toolkit", href: "/dashboard/toolkit", icon: Wrench },
+  { title: "Team", href: "/dashboard/team", icon: UsersRound },
+  { title: "Audit & Reports", href: "/dashboard/audit", icon: ClipboardList },
   {
     title: "Subscriptions",
     href: "/dashboard/subscriptions",
@@ -57,18 +67,16 @@ function AppSidebar() {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   useEffect(() => {
-    const getSubscriptionTier = async () => {
-      const subscriptionTier = await getDashboardStats();
-
-      if (
-        subscriptionTier?.subscriptionType?.subscriptionTier === "PRO" &&
-        subscriptionTier?.subscriptionType?.subscriptionStatus === "ACTIVE"
-      ) {
-        setProUser(true);
+    const loadSubscription = async () => {
+      try {
+        const { isPro } = await getSubscriptionStatus();
+        setProUser(isPro);
+      } catch (error) {
+        console.error("Failed to load subscription status:", error);
       }
     };
 
-    getSubscriptionTier();
+    loadSubscription();
   }, []);
 
   const isActive = (url: string) => {

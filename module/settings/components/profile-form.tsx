@@ -52,7 +52,7 @@ export default function ProfilePage() {
   }, [profile]);
 
   const updateMutation = useMutation({
-    mutationFn: async (data: { name: string; email: string }) => {
+    mutationFn: async (data: { name: string }) => {
       return await updateUserProfile(data);
     },
     onSuccess: (result) => {
@@ -60,6 +60,8 @@ export default function ProfilePage() {
         toast.success("Profile updated successfully");
         queryClient.invalidateQueries({ queryKey: ["user-profile"] });
         setOpen(false);
+      } else {
+        toast.error(result?.error || "Failed to update profile");
       }
     },
     onError: () => {
@@ -69,7 +71,7 @@ export default function ProfilePage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    updateMutation.mutate({ name, email });
+    updateMutation.mutate({ name });
   };
 
   if (isLoading) {
@@ -141,7 +143,7 @@ export default function ProfilePage() {
               <DialogHeader>
                 <DialogTitle className="text-xl font-bold">Update Profile</DialogTitle>
                 <DialogDescription>
-                  Make changes to your public display name and contact email.
+                  Change your public display name. Your email comes from your GitHub login.
                 </DialogDescription>
               </DialogHeader>
               <form onSubmit={handleSubmit} className="space-y-4 pt-2">
@@ -154,6 +156,7 @@ export default function ProfilePage() {
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     required
+                    maxLength={80}
                     className="h-9"
                   />
                 </div>
@@ -165,8 +168,8 @@ export default function ProfilePage() {
                     id="email"
                     type="email"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    required
+                    readOnly
+                    disabled
                     className="h-9"
                   />
                 </div>

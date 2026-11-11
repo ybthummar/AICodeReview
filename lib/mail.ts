@@ -1,6 +1,31 @@
 import { Resend } from "resend";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Created lazily so a missing RESEND_API_KEY cannot crash every module that imports this file.
+let resendClient: Resend | null = null;
+
+function getResend() {
+  if (!resendClient) {
+    if (!process.env.RESEND_API_KEY) {
+      throw new Error("RESEND_API_KEY is not configured");
+    }
+    resendClient = new Resend(process.env.RESEND_API_KEY);
+  }
+  return resendClient;
+}
+
+export function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+const APP_URL =
+  process.env.NEXT_PUBLIC_APP_BASE_URL ||
+  process.env.NEXT_PUBLIC_APP_URL ||
+  "http://localhost:3000";
 
 interface SendMailOptions {
   to: string;
@@ -30,7 +55,7 @@ export async function sendMail({
       emailPayload.cc = cc;
     }
 
-    let response = await resend.emails.send(emailPayload);
+    let response = await getResend().emails.send(emailPayload);
 
     // If Resend rejected because the custom domain is unverified, auto-fallback to onboarding@resend.dev
     if (
@@ -42,7 +67,7 @@ export async function sendMail({
         `Custom domain '${from}' is not verified in Resend. Automatically falling back to 'RepoPilot <onboarding@resend.dev>'...`
       );
       emailPayload.from = "RepoPilot <onboarding@resend.dev>";
-      response = await resend.emails.send(emailPayload);
+      response = await getResend().emails.send(emailPayload);
     }
 
     if (response.error) {
@@ -76,12 +101,12 @@ export async function sendReviewNotificationEmail({
 }) {
   const content = `
     <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
-      <h3 style="margin-top: 0; color: #1e293b; font-size: 16px;">PR #${prNumber}: ${prTitle}</h3>
-      <p style="color: #64748b; font-size: 13px; margin-bottom: 12px;">Repository: <strong>${repoName}</strong></p>
-      <div style="font-size: 14px; color: #334155; line-height: 1.6; white-space: pre-wrap;">${reviewSnippet.slice(0, 400)}...</div>
+      <h3 style="margin-top: 0; color: #1e293b; font-size: 16px;">PR #${prNumber}: ${escapeHtml(prTitle)}</h3>
+      <p style="color: #64748b; font-size: 13px; margin-bottom: 12px;">Repository: <strong>${escapeHtml(repoName)}</strong></p>
+      <div style="font-size: 14px; color: #334155; line-height: 1.6; white-space: pre-wrap;">${escapeHtml(reviewSnippet.slice(0, 400))}...</div>
     </div>
     <div style="text-align: center; margin-top: 24px;">
-      <a href="${reviewUrl || "http://localhost:3000/dashboard/reviews"}" style="background-color: #2563eb; color: #ffffff; text-decoration: none; padding: 10px 20px; border-radius: 6px; font-weight: 600; display: inline-block;">
+      <a href="${reviewUrl || `${APP_URL}/dashboard/reviews`}" style="background-color: #2563eb; color: #ffffff; text-decoration: none; padding: 10px 20px; border-radius: 6px; font-weight: 600; display: inline-block;">
         View Full AI Review in Dashboard
       </a>
     </div>

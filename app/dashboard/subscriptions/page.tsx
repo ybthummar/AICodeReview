@@ -3,7 +3,8 @@
 
 import { useState, useEffect } from "react";
 import { Check, Loader2 } from "lucide-react";
-import { getDashboardStats } from "@/module/dashboard/actions";
+import { getSubscriptionStatus } from "@/module/dashboard/actions";
+import UsageMeter from "@/module/billing/components/usage-meter";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -21,9 +22,10 @@ const TIERS: Record<string, TierInfo> = {
     description: "Perfect for getting started",
     features: [
       "1 connected repository",
-      "Basic PR reviews",
-      "Standard processing",
-      "Community support",
+      "10 AI reviews, 30 codebase questions and 20 toolkit runs per month",
+      "Risk scorecard, inline comments and security scan",
+      "Team workspaces up to 3 members",
+      "Slack, Discord and Teams alerts",
     ],
   },
   PRO: {
@@ -32,37 +34,32 @@ const TIERS: Record<string, TierInfo> = {
     description: "For power users",
     features: [
       "Unlimited repositories",
-      "Unlimited PR reviews",
-      "Priority processing",
-      "24/7 priority support",
-      "Advanced analytics",
+      "Unlimited AI reviews, questions and toolkit runs",
+      "GitHub quality-gate status checks",
+      "Unlimited team members",
+      "Priority support",
     ],
   },
 };
 
+type PlanStatus = Awaited<ReturnType<typeof getSubscriptionStatus>>;
+
 function SubscriptionPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [currentTier, setCurrentTier] = useState<"FREE" | "PRO" | null>(null);
+  const [plan, setPlan] = useState<PlanStatus | null>(null);
   const [isLoadingStats, setIsLoadingStats] = useState(true);
-  const paymentConfigured = Boolean(process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID);
+
+  const currentTier: "FREE" | "PRO" | null = plan ? (plan.isPro ? "PRO" : "FREE") : null;
+  const isAdminPlan = plan?.tier === "ADMIN";
 
   useEffect(() => {
     async function fetchUserTier() {
       try {
-        const subscriptionTier = await getDashboardStats();
-
-        if (
-          subscriptionTier?.subscriptionType?.subscriptionTier === "PRO" &&
-          subscriptionTier?.subscriptionType?.subscriptionStatus === "ACTIVE"
-        ) {
-          setCurrentTier("PRO");
-        } else {
-          setCurrentTier("FREE");
-        }
+        setPlan(await getSubscriptionStatus());
       } catch (err) {
         console.error("Failed to fetch subscription tier:", err);
-        setCurrentTier("FREE");
+        setPlan({ tier: "FREE", isPro: false, endsAt: null, daysLeft: null });
       } finally {
         setIsLoadingStats(false);
       }
@@ -144,7 +141,7 @@ function SubscriptionPage() {
               throw new Error(errData?.error || "Payment verification failed");
             }
 
-            setCurrentTier("PRO");
+            setError(null);
             window.location.href = `${window.location.origin}/dashboard/subscriptions?payment=success`;
           } catch (verifyErr: any) {
             console.error("Verification error:", verifyErr);
@@ -224,6 +221,27 @@ function SubscriptionPage() {
           </h1>
         </div>
 
+        {/* Usage */}
+        <div className="mt-6 max-w-4xl mx-auto">
+          {plan?.isPro && plan.endsAt && (
+            <div
+              className={`mb-4 rounded-lg border px-4 py-3 text-sm ${
+                (plan.daysLeft ?? 99) <= 7
+                  ? "border-amber-200 bg-amber-50 text-amber-800"
+                  : "border-emerald-200 bg-emerald-50 text-emerald-800"
+              }`}
+            >
+              PRO is active until{" "}
+              <strong>
+                {new Date(plan.endsAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
+              </strong>{" "}
+              ({plan.daysLeft} day{plan.daysLeft === 1 ? "" : "s"} left).{" "}
+              {(plan.daysLeft ?? 99) <= 7 ? "Extend now to keep unlimited access." : "You can extend at any time."}
+            </div>
+          )}
+          <UsageMeter />
+        </div>
+
         {/* Pricing Cards */}
         <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto mt-10">
           {Object.values(TIERS).map((tier) => {
@@ -273,22 +291,22 @@ function SubscriptionPage() {
                 {tier.name === "PRO" && (
                   <Button
                     onClick={handleUpgrade}
-                    disabled={loading || isCurrentPlan || !paymentConfigured}
+                    disabled={loading || isAdminPlan}
                     className={`w-full py-2 rounded-md font-medium transition-all ${
-                      isCurrentPlan || !paymentConfigured
+                      isAdminPlan
                         ? "bg-gray-100 text-gray-500 cursor-not-allowed"
                         : "bg-blue-600 text-white hover:bg-blue-700"
                     }`}
                   >
-                    {isCurrentPlan ? (
-                      "PRO Member"
-                    ) : !paymentConfigured ? (
-                      "Payment setup pending"
+                    {isAdminPlan ? (
+                      "Included with admin access"
                     ) : loading ? (
                       <span className="flex items-center justify-center gap-2">
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        Redirecting to Razorpay...
+                        Opening Razorpay...
                       </span>
+                    ) : isCurrentPlan ? (
+                      "Extend by 30 days"
                     ) : (
                       "Upgrade to PRO"
                     )}

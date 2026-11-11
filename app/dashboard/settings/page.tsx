@@ -2,6 +2,9 @@
 
 import ProfilePage from "@/module/settings/components/profile-form";
 import RepositoryList from "@/module/settings/components/repositories-list";
+import NotificationChannels from "@/module/settings/components/notification-channels";
+import GitHubAppCard from "@/module/settings/components/github-app";
+import ApiKeys from "@/module/settings/components/api-keys";
 
 function SettingsPage() {
   return (
@@ -18,6 +21,9 @@ function SettingsPage() {
       <div className="space-y-6">
         <ProfilePage />
         <RepositoryList />
+        <GitHubAppCard />
+        <NotificationChannels />
+        <ApiKeys />
       </div>
     </div>
   );

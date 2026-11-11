@@ -3,6 +3,12 @@ import { Octokit } from "octokit";
 import { auth } from "@/lib/auth";
 import prisma from "@/lib/db";
 import { headers } from "next/headers";
+import { BOT_MARKER } from "@/module/github/lib/markers";
+import {
+  isIndexablePath,
+  MAX_INDEXED_FILE_BYTES,
+  MAX_INDEXED_FILES,
+} from "@/module/ai/lib/indexable";
 
 export const getGitHubToken = async () => {
   const session = await auth.api.getSession({
@@ -82,6 +88,26 @@ export const getRepositories = async (
   return data;
 };
 
+const WEBHOOK_EVENTS = ["pull_request", "issue_comment", "pull_request_review_comment"] as const;
+
+// Confirms the signed-in user really has write access to the repository they are connecting.
+export const verifyRepositoryAccess = async (owner: string, repo: string, githubId: number) => {
+  const token = await getGitHubToken();
+  const octokit = new Octokit({ auth: token });
+
+  const { data } = await octokit.rest.repos.get({ owner, repo });
+
+  if (data.id !== githubId) {
+    throw new Error("The repository details do not match GitHub. Refresh the page and try again.");
+  }
+
+  if (!data.permissions?.push && !data.permissions?.admin) {
+    throw new Error("You need write access to this repository to connect it.");
+  }
+
+  return { owner: data.owner.login, name: data.name };
+};
+
 export const createWebhook = async (owner: string, repo: string) => {
   const token = await getGitHubToken();
   const octokit = new Octokit({
@@ -96,23 +122,38 @@ export const createWebhook = async (owner: string, repo: string) => {
       repo,
     });
 
+    const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
+    const config = {
+      url: webhookUrl,
+      content_type: "json",
+      ...(webhookSecret ? { secret: webhookSecret } : {}),
+    };
+
     const existingHook = hooks.find((hook) => hook.config.url === webhookUrl);
 
     if (existingHook) {
+      // Hooks created before slash commands existed only listen to pull_request.
+      const missingEvents = WEBHOOK_EVENTS.some((event) => !existingHook.events.includes(event));
+
+      if (missingEvents) {
+        const { data } = await octokit.rest.repos.updateWebhook({
+          owner,
+          repo,
+          hook_id: existingHook.id,
+          config,
+          events: [...WEBHOOK_EVENTS],
+        });
+        return data;
+      }
+
       return existingHook;
     }
-
-    const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
 
     const { data } = await octokit.rest.repos.createWebhook({
       owner,
       repo,
-      config: {
-        url: webhookUrl,
-        content_type: "json",
-        ...(webhookSecret ? { secret: webhookSecret } : {}),
-      },
-      events: ["pull_request"],
+      config,
+      events: [...WEBHOOK_EVENTS],
     });
 
     return data;
@@ -154,25 +195,9 @@ export const deleteWebhook = async (owner: string, repo: string) => {
   }
 };
 
-// Directories to skip when recursively indexing repo content
-const IGNORED_DIRS = new Set([
-  "node_modules",
-  ".git",
-  ".next",
-  ".vercel",
-  "dist",
-  "build",
-  ".cache",
-  "coverage",
-  "__pycache__",
-  ".turbo",
-  ".output",
-  "vendor",
-  "public",
-  ".idea",
-  ".vscode",
-]);
+const BLOB_FETCH_CONCURRENCY = 8;
 
+// One tree request plus concurrent blob reads instead of a request per directory and file.
 export const getRepoFileContent = async (
   token: string,
   owner: string,
@@ -181,76 +206,57 @@ export const getRepoFileContent = async (
 ): Promise<{ path: string; content: string }[]> => {
   const octokit = new Octokit({ auth: token });
 
-  const { data } = await octokit.rest.repos.getContent({
+  const { data: repository } = await octokit.rest.repos.get({ owner, repo });
+  const { data: tree } = await octokit.rest.git.getTree({
     owner,
     repo,
-    path,
+    tree_sha: repository.default_branch,
+    recursive: "true",
   });
 
-  if (!Array.isArray(data)) {
-    if (data.type === "file" && data.content) {
-      return [
-        {
-          path: data.path,
-          content: Buffer.from(data.content, "base64").toString("utf-8"),
-        },
-      ];
-    }
+  const prefix = path ? `${path.replace(/\/$/, "")}/` : "";
 
-    return [];
-  }
+  const candidates = tree.tree
+    .filter(
+      (item) =>
+        item.type === "blob" &&
+        item.path &&
+        item.sha &&
+        (!prefix || item.path.startsWith(prefix)) &&
+        (item.size ?? 0) <= MAX_INDEXED_FILE_BYTES &&
+        isIndexablePath(item.path)
+    )
+    .slice(0, MAX_INDEXED_FILES);
 
-  let files: { path: string; content: string }[] = [];
+  const files: { path: string; content: string }[] = [];
+  let cursor = 0;
 
-  for (const item of data) {
-    if (item.type === "file") {
-      // Skip non-code and large binary files early to conserve rate limits
-      if (item.path.match(/\.(png|jpg|jpeg|gif|svg|ico|pdf|zip|tar|gz|woff|woff2|ttf|eot|lock|map|mp4|webm|mp3|wav|ogg)$/i)) {
-        continue;
-      }
-
-      // Only fetch code and text files
-      const ext = item.name.split(".").pop()?.toLowerCase();
-      if (!ext || !["js", "ts", "jsx", "tsx", "py", "go", "java", "rs", "cpp", "c", "cs", "php", "rb", "html", "css", "json", "md", "sql", "prisma", "yaml", "yml"].includes(ext)) {
-        continue;
-      }
+  const worker = async () => {
+    while (cursor < candidates.length) {
+      const item = candidates[cursor++];
 
       try {
-        const { data: fileData } = await octokit.rest.repos.getContent({
+        const { data: blob } = await octokit.rest.git.getBlob({
           owner,
           repo,
-          path: item.path,
+          file_sha: item.sha as string,
         });
 
-        if (
-          !Array.isArray(fileData) &&
-          fileData.type === "file" &&
-          fileData.content
-        ) {
+        if (blob.encoding === "base64") {
           files.push({
-            path: item.path,
-            content: Buffer.from(fileData.content, "base64").toString("utf-8"),
+            path: item.path as string,
+            content: Buffer.from(blob.content, "base64").toString("utf-8"),
           });
         }
       } catch (err) {
         console.warn(`Failed to fetch file content for ${item.path}:`, err);
       }
-    } else if (item.type === "dir") {
-      const dirName = item.name || item.path.split("/").pop() || "";
-      if (IGNORED_DIRS.has(dirName)) {
-        continue;
-      }
-
-      try {
-        const subFiles = await getRepoFileContent(token, owner, repo, item.path);
-        files = files.concat(subFiles);
-      } catch (err) {
-        console.warn(`Failed to fetch directory ${item.path}:`, err);
-      }
     }
-  }
+  };
 
-  return files;
+  await Promise.all(Array.from({ length: BLOB_FETCH_CONCURRENCY }, worker));
+
+  return files.sort((a, b) => a.path.localeCompare(b.path));
 };
 
 export interface PullRequestDiffResult {
@@ -261,6 +267,7 @@ export interface PullRequestDiffResult {
   merged: boolean;
   headRef: string;
   baseRef: string;
+  headSha: string;
   filesSummary: string;
   commitsSummary: string;
 }
@@ -347,6 +354,7 @@ export async function getPullRequestDiff(
     merged: !!pr.merged,
     headRef: pr.head?.ref || "source",
     baseRef: pr.base?.ref || "target",
+    headSha: pr.head?.sha || "",
     filesSummary,
     commitsSummary,
   };
@@ -365,10 +373,251 @@ export async function postReviewComment(
     owner,
     repo,
     issue_number: prNumber,
-    body: `## 🤖 AI Code Review\n\n${review}\n\n---\n*Automated review powered by RepoPilot AI.*`,
+    body: `## 🤖 AI Code Review\n\n${review}\n\n---\n*Automated review powered by RepoPilot AI.*\n${BOT_MARKER}`,
   });
 }
 
+// Comments are posted with the connected user's token, so this marker is how we recognise our own messages.
+export { BOT_MARKER };
+
+export async function postPlainComment(
+  token: string,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  body: string
+) {
+  const octokit = new Octokit({ auth: token });
+
+  await octokit.rest.issues.createComment({
+    owner,
+    repo,
+    issue_number: issueNumber,
+    body: `${body}\n\n${BOT_MARKER}`,
+  });
+}
+
+export async function replyToReviewComment(
+  token: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  commentId: number,
+  body: string
+) {
+  const octokit = new Octokit({ auth: token });
+
+  await octokit.rest.pulls.createReplyForReviewComment({
+    owner,
+    repo,
+    pull_number: prNumber,
+    comment_id: commentId,
+    body: `${body}\n\n${BOT_MARKER}`,
+  });
+}
+
+export async function getReviewCommentBody(
+  token: string,
+  owner: string,
+  repo: string,
+  commentId: number
+): Promise<string | null> {
+  const octokit = new Octokit({ auth: token });
+
+  try {
+    const { data } = await octokit.rest.pulls.getReviewComment({
+      owner,
+      repo,
+      comment_id: commentId,
+    });
+    return data.body;
+  } catch {
+    return null;
+  }
+}
+
+export async function reactToComment(
+  token: string,
+  owner: string,
+  repo: string,
+  commentId: number,
+  kind: "issue" | "review",
+  content: "eyes" | "+1" | "-1" | "rocket"
+) {
+  const octokit = new Octokit({ auth: token });
+
+  try {
+    if (kind === "issue") {
+      await octokit.rest.reactions.createForIssueComment({ owner, repo, comment_id: commentId, content });
+    } else {
+      await octokit.rest.reactions.createForPullRequestReviewComment({ owner, repo, comment_id: commentId, content });
+    }
+  } catch {
+    // Reactions are cosmetic.
+  }
+}
+
+export async function postCommitStatus(
+  token: string,
+  owner: string,
+  repo: string,
+  sha: string,
+  state: "success" | "failure" | "pending" | "error",
+  description: string,
+  targetUrl?: string
+) {
+  const octokit = new Octokit({ auth: token });
+
+  await octokit.rest.repos.createCommitStatus({
+    owner,
+    repo,
+    sha,
+    state,
+    context: "RepoPilot / AI Review",
+    description: description.slice(0, 140),
+    ...(targetUrl ? { target_url: targetUrl } : {}),
+  });
+}
+
+
+export interface InlineReviewComment {
+  path: string;
+  line: number;
+  side: "RIGHT";
+  body: string;
+}
+
+// A single bad line makes GitHub reject the whole review, so fall back to one comment at a time.
+export async function postInlineReview(
+  token: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  headSha: string,
+  comments: InlineReviewComment[]
+): Promise<number> {
+  if (comments.length === 0 || !headSha) return 0;
+
+  const octokit = new Octokit({ auth: token });
+
+  try {
+    await octokit.rest.pulls.createReview({
+      owner,
+      repo,
+      pull_number: prNumber,
+      commit_id: headSha,
+      event: "COMMENT",
+      body: "RepoPilot left inline findings on the lines below.",
+      comments,
+    });
+    return comments.length;
+  } catch (error) {
+    console.warn(`Batched inline review failed for ${owner}/${repo}#${prNumber}, retrying individually:`, error);
+  }
+
+  let posted = 0;
+  for (const comment of comments) {
+    try {
+      await octokit.rest.pulls.createReviewComment({
+        owner,
+        repo,
+        pull_number: prNumber,
+        commit_id: headSha,
+        path: comment.path,
+        line: comment.line,
+        side: comment.side,
+        body: comment.body,
+      });
+      posted += 1;
+    } catch (error) {
+      console.warn(`Skipped inline comment on ${comment.path}:${comment.line}:`, error);
+    }
+  }
+
+  return posted;
+}
+
+export async function getGitHubFileContent(
+  token: string,
+  owner: string,
+  repo: string,
+  path: string,
+  ref?: string
+): Promise<string | null> {
+  const octokit = new Octokit({ auth: token });
+
+  try {
+    const { data } = await octokit.rest.repos.getContent({
+      owner,
+      repo,
+      path,
+      ...(ref ? { ref } : {}),
+    });
+
+    if (Array.isArray(data) || data.type !== "file" || !data.content) return null;
+    return Buffer.from(data.content, "base64").toString("utf-8");
+  } catch {
+    return null;
+  }
+}
+
+export async function updatePullRequest(
+  token: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  changes: { title?: string; body?: string }
+) {
+  const octokit = new Octokit({ auth: token });
+
+  await octokit.rest.pulls.update({
+    owner,
+    repo,
+    pull_number: prNumber,
+    ...(changes.title ? { title: changes.title } : {}),
+    ...(changes.body !== undefined ? { body: changes.body } : {}),
+  });
+}
+
+export interface MergedPullRequest {
+  number: number;
+  title: string;
+  body: string | null;
+  author: string;
+  url: string;
+  mergedAt: string;
+  labels: string[];
+}
+
+export async function listMergedPullRequests(
+  token: string,
+  owner: string,
+  repo: string,
+  since: Date
+): Promise<MergedPullRequest[]> {
+  const octokit = new Octokit({ auth: token });
+
+  const { data } = await octokit.rest.pulls.list({
+    owner,
+    repo,
+    state: "closed",
+    sort: "updated",
+    direction: "desc",
+    per_page: 60,
+  });
+
+  return data
+    .filter((pr) => pr.merged_at && new Date(pr.merged_at) >= since)
+    .map((pr) => ({
+      number: pr.number,
+      title: pr.title,
+      body: pr.body,
+      author: pr.user?.login || "unknown",
+      url: pr.html_url,
+      mergedAt: pr.merged_at as string,
+      labels: pr.labels.map((l) => (typeof l === "string" ? l : l.name || "")).filter(Boolean),
+    }));
+}
 
 export interface GitHubPullRequest {
   id: number;
@@ -432,4 +681,39 @@ export async function getOpenPullRequests(
     console.error(`Failed to list pull requests for ${owner}/${repo}:`, error);
     return [];
   }
+}
+
+export interface ClosedPullRequest {
+  number: number;
+  title: string;
+  author: string;
+  createdAt: string;
+  mergedAt: string | null;
+  closedAt: string | null;
+}
+
+// Throws when GitHub rejects the request so callers can tell "no pull requests" from "no access".
+export async function listClosedPullRequests(
+  token: string,
+  owner: string,
+  repo: string
+): Promise<ClosedPullRequest[]> {
+  const octokit = new Octokit({ auth: token });
+  const { data } = await octokit.rest.pulls.list({
+    owner,
+    repo,
+    state: "closed",
+    sort: "updated",
+    direction: "desc",
+    per_page: 100,
+  });
+
+  return data.map((pr) => ({
+    number: pr.number,
+    title: pr.title || `PR #${pr.number}`,
+    author: pr.user?.login || "unknown",
+    createdAt: pr.created_at,
+    mergedAt: pr.merged_at,
+    closedAt: pr.closed_at,
+  }));
 }

@@ -3,7 +3,7 @@
 
 import { inngest } from "../client";
 import prisma from "@/lib/db";
-import { generateRepoSummary } from "@/module/repo-client/actions/index";
+import { generateRepoSummary } from "@/module/repo-client/lib/summary";
 import { sendMail, wrapEmailTemplate } from "@/lib/mail";
 
 function getWeekKey(date = new Date()) {

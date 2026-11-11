@@ -32,6 +32,8 @@ import {
   getMonthlyActivity,
 } from "@/module/dashboard/actions";
 import ContributionGraph from "@/module/dashboard/components/contribution-graph";
+import CodeHealth from "@/module/dashboard/components/code-health";
+import UsageMeter from "@/module/billing/components/usage-meter";
 import type {
   DashboardStats,
   MonthlyActivity,
@@ -51,7 +53,7 @@ const getGreeting = () => {
 };
 
 interface EnhancedStatCardProps extends StatCardProps {
-  badge?: string;
+  hint: string;
   bgTint?: string;
 }
 
@@ -60,6 +62,7 @@ const StatCard: React.FC<EnhancedStatCardProps> = ({
   value,
   icon: Icon,
   iconColor,
+  hint,
   bgTint = "bg-blue-50",
 }) => (
   <Card className="shadow-md border border-slate-200/80 bg-white hover:shadow-lg hover:border-blue-200 transition-all duration-300">
@@ -77,7 +80,7 @@ const StatCard: React.FC<EnhancedStatCardProps> = ({
       </div>
       <p className="text-xs text-slate-500 flex items-center gap-1 mt-1">
         <TrendingUp className="w-3 h-3 text-emerald-500" />
-        <span>Synced with GitHub</span>
+        <span>{hint}</span>
       </p>
     </CardContent>
   </Card>
@@ -142,6 +145,7 @@ function DashboardPage() {
           icon={GitCommit}
           iconColor="text-emerald-600"
           bgTint="bg-emerald-50"
+          hint="Last 12 months on GitHub"
         />
         <StatCard
           title="Pull Requests"
@@ -149,6 +153,7 @@ function DashboardPage() {
           icon={GitPullRequest}
           iconColor="text-blue-600"
           bgTint="bg-blue-50"
+          hint="Authored by you on GitHub"
         />
         <StatCard
           title="AI Reviews Given"
@@ -156,6 +161,7 @@ function DashboardPage() {
           icon={MessageSquare}
           iconColor="text-indigo-600"
           bgTint="bg-indigo-50"
+          hint="Across your connected repos"
         />
         <StatCard
           title="Monitored Repos"
@@ -163,8 +169,14 @@ function DashboardPage() {
           icon={GitBranch}
           iconColor="text-amber-600"
           bgTint="bg-amber-50"
+          hint="Webhook-enabled repositories"
         />
       </div>
+
+      {/* AI Review Insights */}
+      <CodeHealth />
+
+      <UsageMeter />
 
       {/* Main Activity Heatmap */}
       <div className="grid gap-6 grid-cols-1">

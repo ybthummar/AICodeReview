@@ -8,8 +8,10 @@ import {
   addClient,
   addRepoClient,
   getRepoClientMap,
+  removeRepoClient,
   sendEmail,
 } from "@/module/repo-client/actions";
+import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,7 +36,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Plus, Send, Users } from "lucide-react";
+import { Plus, Send, Trash2, Users } from "lucide-react";
 
 type Client = {
   id: string;
@@ -48,6 +50,7 @@ type Repo = {
   fullName: string;
   url: string;
   repositoryClients: {
+    deliveredAt: Date | null;
     client: Client;
   }[];
 };
@@ -148,6 +151,16 @@ export default function ClientsPage() {
       toast.error(error.message || "Failed to send email");
     } finally {
       setSendingEmail(null);
+    }
+  }
+
+  async function handleRemoveClient(repoIdToUpdate: string, clientId: string) {
+    try {
+      await removeRepoClient(repoIdToUpdate, clientId);
+      toast.success("Client removed from repository");
+      await loadData();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to remove client");
     }
   }
 
@@ -305,7 +318,7 @@ export default function ClientsPage() {
                   ) : (
                     <div className="space-y-3">
                       <div className="grid gap-2">
-                        {repo.repositoryClients.map(({ client }) => (
+                        {repo.repositoryClients.map(({ client, deliveredAt }) => (
                           <div
                             key={client.id}
                             className="flex items-center gap-3 px-3 to-white rounded-lg transition-colors"
@@ -319,7 +332,21 @@ export default function ClientsPage() {
                               <p className="font-medium text-slate-900 text-base">
                                 {client.name} : {client.email}
                               </p>
+                              <p className="text-xs text-slate-500">
+                                {deliveredAt
+                                  ? `Last report sent ${formatDistanceToNow(new Date(deliveredAt), { addSuffix: true })}`
+                                  : "No report sent yet"}
+                              </p>
                             </div>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleRemoveClient(repo.id, client.id)}
+                              className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                              title="Remove client from this repository"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
                           </div>
                         ))}
                       </div>

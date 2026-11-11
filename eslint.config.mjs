@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Standalone clients that run outside Next.js.
+    "cli/**",
+    "vscode-extension/**",
   ]),
 ]);
 

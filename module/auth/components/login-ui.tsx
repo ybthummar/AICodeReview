@@ -1,39 +1,12 @@
 "use client";
 
-import type React from "react";
-
 import { useState } from "react";
-import { Mail, Lock, Github, Rat } from "lucide-react";
+import { Github, Rat, ShieldCheck, GitPullRequest, Sparkles } from "lucide-react";
 import { signIn } from "@/lib/auth-client";
-import { Button } from "@/components/ui/button";
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [githubError, setGithubError] = useState<string | null>(null);
-  const [errors, setErrors] = useState<{ email?: string; password?: string }>(
-    {}
-  );
-
-  const validateForm = () => {
-    const newErrors: { email?: string; password?: string } = {};
-    if (!email) newErrors.email = "Email is required";
-    if (!password) newErrors.password = "Password is required";
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
-
-  const handleSignIn = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!validateForm()) return;
-
-    setLoading(true);
-    try {
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleGithubSignIn = async () => {
     setGithubError(null);
@@ -82,131 +55,11 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Form */}
-          <form
-            onSubmit={handleSignIn}
-            className="space-y-5 animate-fade-in-delay"
-          >
-            <div>
-              <label
-                htmlFor="email"
-                className="block text-sm font-medium text-gray-700 mb-2"
-              >
-                Email
-              </label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
-                <input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => {
-                    setEmail(e.target.value);
-                    if (errors.email)
-                      setErrors({ ...errors, email: undefined });
-                  }}
-                  placeholder="you@example.com"
-                  className={`w-full pl-10 pr-4 py-2.5 border rounded-lg text-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-                    errors.email
-                      ? "border-red-500 bg-red-50"
-                      : "border-gray-200 bg-white"
-                  }`}
-                />
-              </div>
-              {errors.email && (
-                <p className="mt-1 text-xs text-red-500">{errors.email}</p>
-              )}
-            </div>
-
-            <div>
-              <label
-                htmlFor="password"
-                className="block text-sm font-medium text-gray-700 mb-2"
-              >
-                Password
-              </label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
-                <input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => {
-                    setPassword(e.target.value);
-                    if (errors.password)
-                      setErrors({ ...errors, password: undefined });
-                  }}
-                  placeholder="••••••••"
-                  className={`w-full pl-10 pr-4 py-2.5 border rounded-lg text-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-                    errors.password
-                      ? "border-red-500 bg-red-50"
-                      : "border-gray-200 bg-white"
-                  }`}
-                />
-              </div>
-              {errors.password && (
-                <p className="mt-1 text-xs text-red-500">{errors.password}</p>
-              )}
-            </div>
-
-            <div className="flex justify-end">
-              <a
-                href="#"
-                className="text-xs font-medium text-blue-600 hover:text-blue-700 transition-colors"
-              >
-                Forgot password?
-              </a>
-            </div>
-
-            <Button
-              type="submit"
-              disabled={loading}
-              className={`w-full py-2.5 px-4 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center justify-center shadow-sm hover:-translate-y-0.5 ${
-                loading
-                  ? "bg-blue-400 text-white cursor-not-allowed"
-                  : "bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:shadow-lg hover:shadow-blue-600/20 active:translate-y-0 focus:outline-none focus:ring-4 focus:ring-blue-200"
-              }`}
-            >
-              {loading ? (
-                <>
-                  <svg
-                    className="animate-spin -ml-1 mr-2 h-4 w-4"
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                  >
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    ></circle>
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                    ></path>
-                  </svg>
-                  Signing in...
-                </>
-              ) : (
-                "Sign in"
-              )}
-            </Button>
-          </form>
-
-          {/* Divider */}
-          <div className="relative my-6">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-gray-200"></div>
-            </div>
-            <div className="relative flex justify-center text-xs">
-              <span className="px-2 bg-white text-gray-500">
-                Or continue with
-              </span>
-            </div>
+          <div className="mb-6 text-center animate-fade-in-delay">
+            <h2 className="text-xl font-semibold text-gray-900">Welcome back</h2>
+            <p className="mt-1 text-sm text-gray-500">
+              Sign in with your GitHub account to connect repositories and get AI reviews.
+            </p>
           </div>
 
           {/* GitHub Sign In */}
@@ -214,15 +67,30 @@ export default function LoginPage() {
             type="button"
             onClick={handleGithubSignIn}
             disabled={loading}
-            className={`w-full py-2.5 px-4 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center justify-center border-2 cursor-pointer shadow-sm hover:-translate-y-0.5 ${
+            className={`w-full py-3 px-4 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center justify-center cursor-pointer shadow-sm hover:-translate-y-0.5 ${
               loading
-                ? "border-gray-200 text-gray-400 cursor-not-allowed bg-gray-50"
-                : "border-gray-200 text-gray-700 hover:border-blue-200 hover:bg-blue-50 active:translate-y-0 focus:outline-none focus:ring-4 focus:ring-gray-100"
+                ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                : "bg-gray-900 text-white hover:bg-gray-800 hover:shadow-lg active:translate-y-0 focus:outline-none focus:ring-4 focus:ring-gray-200"
             }`}
           >
             <Github className="h-5 w-5 mr-2" />
             {loading ? "Connecting to GitHub..." : "Continue with GitHub"}
           </button>
+
+          <ul className="mt-6 space-y-2.5 text-sm text-gray-600">
+            <li className="flex items-center gap-2.5">
+              <Sparkles className="h-4 w-4 shrink-0 text-blue-600" />
+              Risk-scored AI reviews on every pull request
+            </li>
+            <li className="flex items-center gap-2.5">
+              <GitPullRequest className="h-4 w-4 shrink-0 text-blue-600" />
+              Automatic GitHub comments and quality-gate checks
+            </li>
+            <li className="flex items-center gap-2.5">
+              <ShieldCheck className="h-4 w-4 shrink-0 text-blue-600" />
+              Only the access you grant through GitHub OAuth
+            </li>
+          </ul>
 
           {githubError && (
             <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">

@@ -6,6 +6,26 @@ AICodeReview is a developer-focused web application that automates repository an
 
 - Automated weekly repository summaries and scheduled review dispatching (background jobs).
 - AI-assisted review generation using embeddings + vector search for relevant context.
+- AI Review Insights: every review carries a verdict, risk score, quality/security ratings and severity-tagged findings, aggregated in the dashboard Code Health card.
+- GitHub quality gate (PRO): a `RepoPilot / AI Review` commit status is published on each reviewed pull request.
+- Inline PR comments with one-click GitHub suggested changes, only for lines that exist in the diff.
+- Finding tracking: findings fixed between runs are detected automatically; findings can be resolved or dismissed by hand.
+- Security scan on every review: leaked secrets in added lines and new dependencies checked against the OSV database.
+- Per-repository review rules: strictness, focus areas, ignored paths, custom instructions, auto-review toggle, walkthrough toggle, built-in rule packs (OWASP, code hygiene) and your own regex rules.
+- PR walkthrough: per-file summaries and a Mermaid diagram added to the review comment.
+- One-click auto-fix: open a fix pull request or commit a suggested replacement to the PR branch (the line is re-checked first; fork PRs are refused).
+- Feedback loop: thumbs up or down on findings feeds a review-accuracy score, and repeatedly rejected low-severity findings are suppressed per repository.
+- Slash commands in PR comments (`/review`, `/describe [apply]`, `/ask <question>`, `/ignore`, `/help`). Needs `GITHUB_WEBHOOK_SECRET`; only owners, members and collaborators can run them.
+- Engineering analytics (`/dashboard/analytics`): cycle time, time to first review, per-author risk, riskiest files, merges with open high-severity findings.
+- GitHub App install flow (Settings): short-lived installation tokens preferred over personal OAuth tokens.
+- API keys (Settings), a zero-dependency CLI (`cli/repopilot.mjs`) and a VS Code extension (`vscode-extension/`) for reviewing local changes before you push.
+- Audit log and exports (`/dashboard/audit`): activity history, findings CSV and a printable weekly or monthly report.
+- PRO subscriptions run for 30 days per payment, can be extended, and a daily job downgrades expired accounts and sends a renewal reminder three days ahead.
+- Ask your codebase: RAG chat with file and line citations (`/dashboard/chat`).
+- AI Toolkit: PR description generator (can update the PR), unit-test generator, release notes, on-demand security scan (`/dashboard/toolkit`).
+- Team workspaces with Owner / Admin / Member / Viewer roles and shared repositories (`/dashboard/team`).
+- Slack, Discord and Microsoft Teams alerts for completed reviews (Settings).
+- Free-plan monthly quotas with a usage meter (reviews, codebase questions, toolkit runs).
 - GitHub integrations (OAuth / App) and webhook handling for repo events.
 - User authentication, repository management and per-user dashboards.
 - Subscription billing and checkout flows via Razorpay.
@@ -63,17 +83,31 @@ PINECONE_INDEX=aicodereview
 INNGEST_API_KEY=
 RAZORPAY_KEY_ID=
 RAZORPAY_KEY_SECRET=
-RAZORPAY_WEBHOOK_SECRET=
-GITHUB_TOKEN= # or GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY
+RAZORPAY_WEBHOOK_SECRET= # required: unsigned Razorpay webhooks are rejected
+GITHUB_WEBHOOK_SECRET= # required for slash commands and recommended for webhook signing
+GITHUB_TOKEN= # optional fallback
+# Optional GitHub App (Settings > GitHub App). Set the app's Setup URL to <app url>/api/github/app/callback
+# and its webhook URL to <app url>/api/webhooks/github with the same webhook secret.
+GITHUB_APP_ID=
+GITHUB_APP_PRIVATE_KEY= # PEM, newlines may be written as \n
+GITHUB_APP_SLUG=
 OPENAI_API_KEY= # or LLM provider key
 NEXTAUTH_SECRET= # if using NextAuth or similar
 ```
 
-3. Generate Prisma client and run migrations (dev):
+3. Generate Prisma client and run migrations (dev). Two migrations must be applied before starting the app: `20261111120000_add_rules_teams_notifications` (review rules, workspaces, alert channels) and `20261111180000_add_expiry_feedback_keys_audit` (subscription expiry and payments, finding feedback, API keys, audit log, GitHub App installations):
 
 ```bash
 npx prisma generate
 npx prisma migrate dev
+```
+
+Optional quota overrides (defaults shown):
+
+```
+FREE_MONTHLY_REVIEW_LIMIT=10
+FREE_MONTHLY_CHAT_LIMIT=30
+FREE_MONTHLY_TOOLKIT_LIMIT=20
 ```
 
 4. Start the dev server:

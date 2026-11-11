@@ -1,0 +1,14 @@
+{
+  "name": "repopilot-cli",
+  "version": "1.0.0",
+  "description": "Review local git changes with RepoPilot before you push.",
+  "type": "module",
+  "bin": {
+    "repopilot": "./repopilot.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}
