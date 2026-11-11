@@ -146,6 +146,7 @@ Check `package.json` for exact script names used in this repo.
 ## Deployment
 
 - App: Vercel is recommended for seamless Next.js deployments. Set environment variables in the Vercel project settings.
+- GitHub OAuth: use `http://localhost:3000/api/auth/callback/github` for local development and `<production-app-url>/api/auth/callback/github` in Vercel. Use a separate GitHub OAuth app for local development if the production app only allows the production callback. Development always uses `http://localhost:3000` as Better Auth's base URL; production uses `BETTER_AUTH_URL` or `NEXT_PUBLIC_APP_URL`.
 - Prisma migrations: use `npx prisma migrate deploy` in your deployment pipeline.
 - Background jobs: deploy Inngest workers or use Inngest serverless configuration.
 - Webhooks: configure production webhook endpoints and verify signatures using secrets stored in environment variables.
