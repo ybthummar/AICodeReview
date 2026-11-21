@@ -74,16 +74,18 @@ cd AICodeReview
 npm install
 ```
 
-2. Keep local configuration separate from credentials. Copy the development examples:
+2. Create the main environment file and the single local-development override:
 
 ```powershell
+Copy-Item .env.example .env
 Copy-Item .env.development.example .env.development
-Copy-Item .env.development.secrets.example .env.development.local
 ```
 
-Set a local PostgreSQL connection in `.env.development` or override `DATABASE_URL` in `.env.development.local` if it contains credentials. Add development/test provider keys to `.env.development.local`; do not use production credentials locally. Next.js loads these files automatically, and `.env.*` files are ignored by Git. Docker Compose also reads these two files at runtime.
+Put deployment values in Vercel's Environment Variables. For local work, fill in `.env.development` with a local database and development/test credentials; it overrides `.env` while running `npm run dev`. Do not use production credentials locally. Both files are ignored by Git.
 
-For Vercel, use `.env.production.config.example` and `.env.production.secrets.example` as separate checklists for Project Settings > Environment Variables. Set secrets in Vercel, not in a committed file. Configure `BETTER_AUTH_URL` and `NEXT_PUBLIC_APP_URL` to the canonical active production origin. The GitHub OAuth callback must be exactly `<production-app-url>/api/auth/callback/github`.
+For Docker Compose, run `docker compose --env-file .env.development up --build`; Compose uses the same local file for build-time configuration and container runtime values.
+
+Use `.env.example` as the single Vercel Environment Variables checklist. Set secrets in Vercel, not in a committed file. Configure `BETTER_AUTH_URL` and `NEXT_PUBLIC_APP_URL` to the canonical active production origin. The production GitHub OAuth callback must be exactly `<production-app-url>/api/auth/callback/github`.
 
 The Razorpay price is configured as `RAZORPAY_PRO_AMOUNT=14900` with `RAZORPAY_CURRENCY=INR`; Razorpay amounts are in paise, so this is INR 149. Keep this non-secret setting separate from Razorpay credentials.
 
@@ -154,8 +156,8 @@ Check `package.json` for exact script names used in this repo.
 
 ## Security & best practices
 
-- Keep credentials in `.env.development.local` for local development and in Vercel's Environment Variables for deployment. Do not commit `.env` files, put credentials in Docker build arguments, or copy local env files into a Docker image.
-- Use `.env.production.config.example` and `.env.production.secrets.example` as separate production checklists; the secret example is a list of variable names, not a file to upload or commit with values.
+- Keep development credentials in the ignored `.env.development` file and deployment credentials in Vercel's Environment Variables. Do not commit populated `.env` files, put credentials in Docker build arguments, or copy local env files into a Docker image.
+- `.env.example` and `.env.development.example` are the only committed environment templates; they contain placeholders/defaults, not credentials.
 - Validate webhook signatures (Razorpay/GitHub) in `app/api/*` endpoints.
 - Use minimal permissions for GitHub tokens (only the scopes required).
 

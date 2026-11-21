@@ -11,6 +11,5 @@ services:
         RAZORPAY_CURRENCY: ${RAZORPAY_CURRENCY:-INR}
     env_file:
       - .env.development
-      - .env.development.local
     ports:
       - "3000:3000"
