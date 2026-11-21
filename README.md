@@ -85,6 +85,10 @@ Put deployment values in Vercel's Environment Variables. For local work, fill in
 
 The local GitHub OAuth callback defaults to `http://localhost:3000/api/auth/callback/github`. If port 3000 is occupied and Next.js starts on another port, set `BETTER_AUTH_URL`, `NEXT_PUBLIC_APP_URL`, and `NEXT_PUBLIC_APP_BASE_URL` to that exact local origin and update the development OAuth app callback to match. The configured auth URL is used when generating the callback.
 
+If a Vercel environment pull created `.env.local`, Next.js reads it before `.env.development`. Put the three local URLs in `.env.development.local` to override the downloaded values during development. Set the development OAuth credentials and database there too if they differ. Restart the dev server, then start sign-in on that same origin.
+
+The login page shows an error code and recovery guidance when GitHub sign-in fails. A `state_mismatch` means the callback could not be tied to the initiating browser. An `invalid_code` means the token exchange failed. GitHub's token endpoint can give a more specific reason in the server logs. Search for `[auth/github]` to see whether the request failed at sign-in or on the callback. When GitHub itself displays a callback warning, compare its registered callback with the configured origin plus `/api/auth/callback/github`. [GitHub OAuth token exchange errors](https://docs.github.com/en/apps/oauth-apps/maintaining-oauth-apps/troubleshooting-oauth-app-access-token-request-errors)
+
 For Docker Compose, run `docker compose --env-file .env.development up --build`; Compose uses the same local file for build-time configuration and container runtime values.
 
 Use `.env.example` as the single Vercel Environment Variables checklist. Set secrets in Vercel, not in a committed file. Configure `BETTER_AUTH_URL` and `NEXT_PUBLIC_APP_URL` to the canonical active production origin. The production GitHub OAuth callback must be exactly `<production-app-url>/api/auth/callback/github`.
@@ -150,7 +154,7 @@ Check `package.json` for exact script names used in this repo.
 ## Deployment
 
 - App: Vercel is recommended for seamless Next.js deployments. Set environment variables in the Vercel project settings.
-- GitHub OAuth: set `BETTER_AUTH_URL` or `NEXT_PUBLIC_APP_URL` to the canonical production origin in Vercel, and set the GitHub OAuth app callback URL to `<production-app-url>/api/auth/callback/github`. Use a separate GitHub OAuth app for local development if the production app only allows the production callback; local development uses `http://localhost:3000/api/auth/callback/github`. Vercel's deployment URL is trusted for preview-origin requests, but OAuth callbacks still use the canonical configured production URL.
+- GitHub OAuth: set `BETTER_AUTH_URL` or `NEXT_PUBLIC_APP_URL` to the canonical production origin in Vercel, and register `<production-app-url>/api/auth/callback/github` with GitHub. Use a separate development OAuth app if the production app only accepts the production callback. Signing in from an alias or preview URL offers a link to the configured site so the state cookie and callback share an origin.
 - Repository indexing: configure and serve the Inngest endpoint at `/api/inngest`, with `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` set in the app environment. Connect and Re-index queue durable Inngest jobs; they do not run as detached Next.js requests. Indexing embeds file chunks and symbols, upserts the new vectors before removing stale ones, and fails visibly rather than replacing an index after incomplete GitHub fetches or failed embedding/Pinecone writes. Indexing is capped at 400 eligible files per repository.
 - Prisma migrations: use `npx prisma migrate deploy` in your deployment pipeline.
 - Background jobs: deploy Inngest workers or use Inngest serverless configuration.

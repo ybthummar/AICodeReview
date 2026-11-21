@@ -18,36 +18,39 @@ if (process.env.NODE_ENV === "production" && !authSecret) {
   throw new Error("Set BETTER_AUTH_SECRET before deploying the application.");
 }
 
-if (
-  process.env.NODE_ENV === "production" &&
-  (!githubClientId || !githubClientSecret)
-) {
-  throw new Error(
-    "Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET before deploying the application."
-  );
-}
-
-const appUrl = configuredAppUrl || "http://localhost:3000";
+export const authOrigin = new URL(configuredAppUrl || "http://localhost:3000").origin;
 
 const vercelOrigin = process.env.VERCEL_URL
   ? `https://${process.env.VERCEL_URL}`
   : undefined;
 
 export const auth = betterAuth({
-  baseURL: appUrl,
+  baseURL: authOrigin,
   secret: authSecret,
+  onAPIError: {
+    errorURL: `${authOrigin}/login`,
+    throw: true,
+  },
+  logger: {
+    log(level, message, ...details) {
+      // These library messages include OAuth state. The callback route logs the safe error code.
+      if (message === "Failed to parse state" || message === "State not found") return;
+      console[level]("[Better Auth]", message, ...details);
+    },
+  },
   database: prismaAdapter(prisma, {
     provider: "postgresql",
   }),
   socialProviders: {
     github: {
+      enabled: Boolean(githubClientId && githubClientSecret),
       clientId: githubClientId || "",
       clientSecret: githubClientSecret || "",
       scope: ["repo"],
     },
   },
   trustedOrigins: [
-    appUrl,
+    authOrigin,
     ...(vercelOrigin ? [vercelOrigin] : []),
     "http://localhost:3000",
     "http://127.0.0.1:3000",

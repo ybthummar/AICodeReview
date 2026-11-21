@@ -3,37 +3,36 @@
 import { useState } from "react";
 import { Github, Rat, ShieldCheck, GitPullRequest, Sparkles } from "lucide-react";
 import { signIn } from "@/lib/auth-client";
+import { signInCode, signInMessage, type GitHubSignInCode } from "@/module/auth/lib/github-sign-in";
 
-export default function LoginPage() {
+export default function LoginPage({ authOrigin, initialError }: {
+  authOrigin: string;
+  initialError: GitHubSignInCode | null;
+}) {
   const [loading, setLoading] = useState(false);
-  const [githubError, setGithubError] = useState<string | null>(null);
+  const [githubError, setGithubError] = useState(initialError);
 
   const handleGithubSignIn = async () => {
+    if (window.location.origin !== authOrigin) {
+      setGithubError("login_origin_mismatch");
+      return;
+    }
     setGithubError(null);
     setLoading(true);
 
     try {
-      await signIn.social({
+      const { data, error } = await signIn.social({
         provider: "github",
         callbackURL: "/dashboard",
         errorCallbackURL: "/login",
       });
-    } catch (error) {
-      console.error("Error during GitHub sign-in:", error);
-
-      const message =
-        error instanceof Error
-          ? error.message
-          : "GitHub sign-in failed. Please check the GitHub OAuth setup or callback URL.";
-
-      setGithubError(
-        message.includes("redirect") || message.includes("callback")
-          ? "GitHub sign-in failed because the callback URL does not match. Please check the GitHub OAuth app settings."
-          : "GitHub sign-in failed. Please try again or check the GitHub OAuth configuration."
-      );
-    } finally {
-      setLoading(false);
+      if (error || !data?.url) {
+        setGithubError(signInCode(error?.code, "sign-in", error?.status));
+      }
+    } catch {
+      setGithubError("network_error");
     }
+    setLoading(false);
   };
 
   return (
@@ -79,6 +78,21 @@ export default function LoginPage() {
             {loading ? "Connecting to GitHub..." : "Continue with GitHub"}
           </button>
 
+          {githubError && (
+            <div role="alert" className="mt-3 space-y-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              <p>{signInMessage(githubError)}</p>
+              {githubError === "login_origin_mismatch" && (
+                <a href={`${authOrigin}/login`} className="block break-all font-medium underline">
+                  Continue on {authOrigin}
+                </a>
+              )}
+              {["login_origin_mismatch", "invalid_origin", "redirect_uri_mismatch", "invalid_code"].includes(githubError) && (
+                <p>Configured callback <code className="block break-all">{authOrigin}/api/auth/callback/github</code></p>
+              )}
+              <p className="text-xs">Error code <code>{githubError}</code></p>
+            </div>
+          )}
+
           <ul className="mt-6 space-y-2.5 text-sm text-gray-600">
             <li className="flex items-center gap-2.5">
               <Sparkles className="h-4 w-4 shrink-0 text-blue-600" />
@@ -93,12 +107,6 @@ export default function LoginPage() {
               Only the access you grant through GitHub OAuth
             </li>
           </ul>
-
-          {githubError && (
-            <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {githubError}
-            </div>
-          )}
 
           {/* Footer */}
           <p className="mt-8 text-center text-xs text-gray-500">
