@@ -25,10 +25,16 @@ export const useConnectRepository = () => {
         return;
       }
 
+      const warnings: string[] = [];
       if (result.data.webhook === "failed") {
-        toast.warning(
-          "Repository connected, but the GitHub webhook could not be registered. Reviews will only run when you start them from the dashboard."
-        );
+        warnings.push("the GitHub webhook could not be registered");
+      }
+      if (!result.data.indexingQueued) {
+        warnings.push("indexing could not be queued; use Re-index from the codebase chat");
+      }
+
+      if (warnings.length > 0) {
+        toast.warning(`Repository connected, but ${warnings.join(" and ")}.`);
       } else {
         toast.success("Repository connected successfully");
       }

@@ -79,8 +79,13 @@ DATABASE_URL=postgresql://user:pass@localhost:5432/aicodereview
 NEXT_PUBLIC_VERCEL_URL=http://localhost:3000
 PINECONE_API_KEY=
 PINECONE_ENV=us-west1-gcp
-PINECONE_INDEX=aicodereview
-INNGEST_API_KEY=
+PINECONE_INDEX=aicodereview-bedrock-1024
+INNGEST_EVENT_KEY=
+INNGEST_SIGNING_KEY=
+AWS_BEARER_TOKEN_BEDROCK= # keep server-side; never expose with NEXT_PUBLIC_
+AWS_REGION=ap-southeast-2
+BEDROCK_CHAT_MODEL_ID=arn:aws:bedrock:ap-southeast-2:888293064922:inference-profile/au.anthropic.claude-sonnet-4-6
+BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
 RAZORPAY_KEY_ID=
 RAZORPAY_KEY_SECRET=
 RAZORPAY_WEBHOOK_SECRET= # required: unsigned Razorpay webhooks are rejected
@@ -91,9 +96,10 @@ GITHUB_TOKEN= # optional fallback
 GITHUB_APP_ID=
 GITHUB_APP_PRIVATE_KEY= # PEM, newlines may be written as \n
 GITHUB_APP_SLUG=
-OPENAI_API_KEY= # or LLM provider key
-NEXTAUTH_SECRET= # if using NextAuth or similar
+GOOGLE_GENERATIVE_AI_API_KEY= # fallback for text generation; also used when Bedrock embeddings are not configured
 ```
+
+The Bedrock chat model is tried first; the existing Google text-generation models are fallbacks. Titan Text Embeddings V2 is configured for 1,024 dimensions. Create a Pinecone index with dimension `1024` and set `PINECONE_INDEX` to that index before enabling Bedrock embeddings; the existing Google embedding index cannot be reused. Embedding requests stay on one provider per configuration and do not silently fall back across providers, because mixing embedding spaces makes retrieval unreliable. If Bedrock embedding is unavailable, indexing and RAG queries fail visibly; Inngest can retry indexing.
 
 3. Generate Prisma client and run migrations (dev). Two migrations must be applied before starting the app: `20261111120000_add_rules_teams_notifications` (review rules, workspaces, alert channels) and `20261111180000_add_expiry_feedback_keys_audit` (subscription expiry and payments, finding feedback, API keys, audit log, GitHub App installations):
 
@@ -147,6 +153,7 @@ Check `package.json` for exact script names used in this repo.
 
 - App: Vercel is recommended for seamless Next.js deployments. Set environment variables in the Vercel project settings.
 - GitHub OAuth: use `http://localhost:3000/api/auth/callback/github` for local development and `<production-app-url>/api/auth/callback/github` in Vercel. Use a separate GitHub OAuth app for local development if the production app only allows the production callback. Development always uses `http://localhost:3000` as Better Auth's base URL; production uses `BETTER_AUTH_URL` or `NEXT_PUBLIC_APP_URL`.
+- Repository indexing: configure and serve the Inngest endpoint at `/api/inngest`, with `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` set in the app environment. Connect and Re-index queue durable Inngest jobs; they do not run as detached Next.js requests. Indexing embeds file chunks and symbols, upserts the new vectors before removing stale ones, and fails visibly rather than replacing an index after incomplete GitHub fetches or failed embedding/Pinecone writes. Indexing is capped at 400 eligible files per repository.
 - Prisma migrations: use `npx prisma migrate deploy` in your deployment pipeline.
 - Background jobs: deploy Inngest workers or use Inngest serverless configuration.
 - Webhooks: configure production webhook endpoints and verify signatures using secrets stored in environment variables.

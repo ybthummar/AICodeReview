@@ -10,7 +10,7 @@ import {
   type ChatMessage,
 } from "@/module/chat/lib/answer";
 import { findAccessibleRepository, requireRepositoryToken } from "@/module/team/lib/access";
-import { performDirectRepoIndex } from "@/inngest/functions";
+import { queueRepositoryIndex } from "@/inngest/functions";
 
 const MAX_QUESTION_LENGTH = 1000;
 
@@ -85,13 +85,10 @@ export async function reindexRepository(repositoryId: string): Promise<ActionRes
     const access = await findAccessibleRepository(session.user, { id: repositoryId }, "OWNER");
     if (!access) return fail(new Error("Only the person who connected the repository can re-index it."));
 
-    // Indexing can take minutes, so it runs in the background.
-    performDirectRepoIndex({
+    await queueRepositoryIndex({
       owner: access.repository.owner,
       repo: access.repository.name,
       userId: access.repository.userId,
-    }).catch((error) => {
-      console.error("Re-index failed:", error);
     });
 
     return ok(null);

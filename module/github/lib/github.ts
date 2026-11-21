@@ -214,9 +214,15 @@ export const getRepoFileContent = async (
     recursive: "true",
   });
 
+  if (tree.truncated) {
+    throw new Error(
+      `GitHub returned an incomplete file tree for ${owner}/${repo}; refusing to replace its code index.`
+    );
+  }
+
   const prefix = path ? `${path.replace(/\/$/, "")}/` : "";
 
-  const candidates = tree.tree
+  const allCandidates = tree.tree
     .filter(
       (item) =>
         item.type === "blob" &&
@@ -226,9 +232,17 @@ export const getRepoFileContent = async (
         (item.size ?? 0) <= MAX_INDEXED_FILE_BYTES &&
         isIndexablePath(item.path)
     )
-    .slice(0, MAX_INDEXED_FILES);
+    .sort((a, b) => (a.path ?? "").localeCompare(b.path ?? ""));
+  const candidates = allCandidates.slice(0, MAX_INDEXED_FILES);
+
+  if (allCandidates.length > MAX_INDEXED_FILES) {
+    console.warn(
+      `Indexing ${MAX_INDEXED_FILES} of ${allCandidates.length} eligible files in ${owner}/${repo}; the configured file limit was reached.`
+    );
+  }
 
   const files: { path: string; content: string }[] = [];
+  const failedPaths: string[] = [];
   let cursor = 0;
 
   const worker = async () => {
@@ -242,19 +256,31 @@ export const getRepoFileContent = async (
           file_sha: item.sha as string,
         });
 
-        if (blob.encoding === "base64") {
-          files.push({
-            path: item.path as string,
-            content: Buffer.from(blob.content, "base64").toString("utf-8"),
-          });
+        if (blob.encoding !== "base64") {
+          throw new Error(`GitHub returned unsupported blob encoding for ${item.path}`);
         }
+
+        files.push({
+          path: item.path as string,
+          content: Buffer.from(blob.content, "base64").toString("utf-8"),
+        });
       } catch (err) {
-        console.warn(`Failed to fetch file content for ${item.path}:`, err);
+        console.warn(
+          `Failed to fetch file content for ${item.path}:`,
+          err instanceof Error ? err.message : "unknown error"
+        );
+        failedPaths.push(item.path as string);
       }
     }
   };
 
   await Promise.all(Array.from({ length: BLOB_FETCH_CONCURRENCY }, worker));
+
+  if (failedPaths.length > 0) {
+    throw new Error(
+      `Could not fetch ${failedPaths.length} file${failedPaths.length === 1 ? "" : "s"} from ${owner}/${repo}; refusing to replace its code index.`
+    );
+  }
 
   return files.sort((a, b) => a.path.localeCompare(b.path));
 };

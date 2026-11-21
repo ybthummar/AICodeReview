@@ -99,7 +99,7 @@ export default function ChatPage() {
     mutationFn: async () => await reindexRepository(repositoryId),
     onSuccess: (result) => {
       if (result.ok) {
-        toast.success("Indexing started. It can take a few minutes for large repositories.");
+        toast.success("Re-index queued. It can take a few minutes for large repositories.");
       } else {
         toast.error(result.error);
       }

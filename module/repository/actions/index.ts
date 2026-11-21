@@ -12,8 +12,7 @@ import {
   verifyRepositoryAccess,
 } from "@/module/github/lib/github";
 import { hasInstallationForAccount } from "@/module/github/lib/app";
-import { inngest } from "@/inngest/client";
-import { performDirectRepoIndex } from "@/inngest/functions";
+import { queueRepositoryIndex } from "@/inngest/functions";
 import { recordAudit } from "@/module/audit/lib/audit";
 import { revalidatePath } from "next/cache";
 
@@ -51,7 +50,7 @@ export const connectRepository = async (
   owner: string,
   repo: string,
   githubId: number
-): Promise<ActionResult<{ webhook: WebhookMode }>> => {
+): Promise<ActionResult<{ webhook: WebhookMode; indexingQueued: boolean }>> => {
   try {
     const session = await auth.api.getSession({
       headers: await headers(),
@@ -138,32 +137,16 @@ export const connectRepository = async (
       },
     });
 
-    // Index for RAG: try Inngest first, fall back to direct execution
-    let queuedWithInngest = false;
-    if (process.env.INNGEST_EVENT_KEY) {
-      try {
-        await inngest.send({
-          name: "repository.connected",
-          data: {
-            owner: canonical.owner,
-            repo: canonical.name,
-            userId: session.user.id,
-          },
-        });
-        queuedWithInngest = true;
-      } catch (error) {
-        console.warn("Failed to trigger repository indexing via Inngest:", error);
-      }
-    }
-
-    if (!queuedWithInngest) {
-      performDirectRepoIndex({
+    let indexingQueued = false;
+    try {
+      await queueRepositoryIndex({
         owner: canonical.owner,
         repo: canonical.name,
         userId: session.user.id,
-      }).catch((err) => {
-        console.error("Direct repository indexing error:", err);
       });
+      indexingQueued = true;
+    } catch (error) {
+      console.error(`Failed to queue indexing for ${canonical.owner}/${canonical.name}:`, error);
     }
 
     await recordAudit({
@@ -177,7 +160,7 @@ export const connectRepository = async (
     revalidatePath("/dashboard/repositories", "page");
     revalidatePath("/dashboard/settings", "page");
 
-    return ok({ webhook });
+    return ok({ webhook, indexingQueued });
   } catch (error) {
     console.error("connectRepository failed:", error);
     return fail(error, "Could not connect the repository.");

@@ -1,5 +1,6 @@
 import { generateText } from "ai";
 import { google } from "@ai-sdk/google";
+import { generateBedrockText, isBedrockConfigured } from "@/module/ai/lib/bedrock";
 
 const MODELS_TO_TRY = [
   "gemini-flash-lite-latest",
@@ -12,6 +13,15 @@ export async function generateWithFallback(
   options: { temperature?: number } = {}
 ): Promise<string> {
   let lastError: unknown;
+
+  if (isBedrockConfigured()) {
+    try {
+      return await generateBedrockText(prompt, options);
+    } catch (error) {
+      console.warn("Bedrock model failed; trying configured Google model fallbacks.", error);
+      lastError = error;
+    }
+  }
 
   for (const modelName of MODELS_TO_TRY) {
     try {
@@ -27,5 +37,6 @@ export async function generateWithFallback(
     }
   }
 
-  throw lastError;
+  if (lastError) throw lastError;
+  throw new Error("No AI model could generate a response.");
 }
