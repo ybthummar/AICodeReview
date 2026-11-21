@@ -74,33 +74,18 @@ cd AICodeReview
 npm install
 ```
 
-2. Create an environment file `.env` at the project root with required variables. Example list (verify usage in `lib/` and `module/`):
+2. Keep local configuration separate from credentials. Copy the development examples:
 
+```powershell
+Copy-Item .env.development.example .env.development
+Copy-Item .env.development.secrets.example .env.development.local
 ```
-DATABASE_URL=postgresql://user:pass@localhost:5432/aicodereview
-NEXT_PUBLIC_VERCEL_URL=http://localhost:3000
-PINECONE_API_KEY=
-PINECONE_GOOGLE_INDEX=repopilot-v2
-INNGEST_EVENT_KEY=
-INNGEST_SIGNING_KEY=
-RAZORPAY_KEY_ID=
-RAZORPAY_KEY_SECRET=
-RAZORPAY_WEBHOOK_SECRET= # required: unsigned Razorpay webhooks are rejected
-GITHUB_WEBHOOK_SECRET= # required for slash commands and recommended for webhook signing
-GITHUB_TOKEN= # optional fallback
-# Optional GitHub App (Settings > GitHub App). Set the app's Setup URL to <app url>/api/github/app/callback
-# and its webhook URL to <app url>/api/webhooks/github with the same webhook secret.
-GITHUB_APP_ID=
-GITHUB_APP_PRIVATE_KEY= # PEM, newlines may be written as \n
-GITHUB_APP_SLUG=
-GOOGLE_GENERATIVE_AI_API_KEY=
-# Optional text generation fallbacks
-DEPLOY_API_KEY=
-GLM_API_KEY=
-OPENAI_API_KEY=
-# Optional saved OpenAI agent for the Issue Investigation tab
-OPENAI_ISSUE_AGENT_ID=
-```
+
+Set a local PostgreSQL connection in `.env.development` or override `DATABASE_URL` in `.env.development.local` if it contains credentials. Add development/test provider keys to `.env.development.local`; do not use production credentials locally. Next.js loads these files automatically, and `.env.*` files are ignored by Git. Docker Compose also reads these two files at runtime.
+
+For Vercel, use `.env.production.config.example` and `.env.production.secrets.example` as separate checklists for Project Settings > Environment Variables. Set secrets in Vercel, not in a committed file. Configure `BETTER_AUTH_URL` and `NEXT_PUBLIC_APP_URL` to the canonical active production origin. The GitHub OAuth callback must be exactly `<production-app-url>/api/auth/callback/github`.
+
+The Razorpay price is configured as `RAZORPAY_PRO_AMOUNT=14900` with `RAZORPAY_CURRENCY=INR`; Razorpay amounts are in paise, so this is INR 149. Keep this non-secret setting separate from Razorpay credentials.
 
 RepoPilot uses `gemini-embedding-001` for repository indexing and for search queries from codebase chat and reviews. Set `PINECONE_GOOGLE_INDEX` to an index for that model. The app reads the index dimension and requests matching vectors from Gemini. `PINECONE_NAMESPACE` is optional. The app detects the Pinecone API mode and uses its default namespace when the variable is empty. Schema-based indexes use `X-Pinecone-Api-Version: 2026-07`.
 
@@ -161,7 +146,7 @@ Check `package.json` for exact script names used in this repo.
 ## Deployment
 
 - App: Vercel is recommended for seamless Next.js deployments. Set environment variables in the Vercel project settings.
-- GitHub OAuth: use `http://localhost:3000/api/auth/callback/github` for local development and `<production-app-url>/api/auth/callback/github` in Vercel. Use a separate GitHub OAuth app for local development if the production app only allows the production callback. Development always uses `http://localhost:3000` as Better Auth's base URL; production uses `BETTER_AUTH_URL` or `NEXT_PUBLIC_APP_URL`.
+- GitHub OAuth: set `BETTER_AUTH_URL` or `NEXT_PUBLIC_APP_URL` to the canonical production origin in Vercel, and set the GitHub OAuth app callback URL to `<production-app-url>/api/auth/callback/github`. Use a separate GitHub OAuth app for local development if the production app only allows the production callback; local development uses `http://localhost:3000/api/auth/callback/github`. Vercel's deployment URL is trusted for preview-origin requests, but OAuth callbacks still use the canonical configured production URL.
 - Repository indexing: configure and serve the Inngest endpoint at `/api/inngest`, with `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` set in the app environment. Connect and Re-index queue durable Inngest jobs; they do not run as detached Next.js requests. Indexing embeds file chunks and symbols, upserts the new vectors before removing stale ones, and fails visibly rather than replacing an index after incomplete GitHub fetches or failed embedding/Pinecone writes. Indexing is capped at 400 eligible files per repository.
 - Prisma migrations: use `npx prisma migrate deploy` in your deployment pipeline.
 - Background jobs: deploy Inngest workers or use Inngest serverless configuration.
@@ -169,7 +154,8 @@ Check `package.json` for exact script names used in this repo.
 
 ## Security & best practices
 
-- Do not commit `.env` or secrets to source control.
+- Keep credentials in `.env.development.local` for local development and in Vercel's Environment Variables for deployment. Do not commit `.env` files, put credentials in Docker build arguments, or copy local env files into a Docker image.
+- Use `.env.production.config.example` and `.env.production.secrets.example` as separate production checklists; the secret example is a list of variable names, not a file to upload or commit with values.
 - Validate webhook signatures (Razorpay/GitHub) in `app/api/*` endpoints.
 - Use minimal permissions for GitHub tokens (only the scopes required).
 
