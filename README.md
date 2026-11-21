@@ -81,7 +81,9 @@ Copy-Item .env.example .env
 Copy-Item .env.development.example .env.development
 ```
 
-Put deployment values in Vercel's Environment Variables. For local work, fill in `.env.development` with a local database and development/test credentials; it overrides `.env` while running `npm run dev`. Do not use production credentials locally. Both files are ignored by Git.
+Put deployment values in Vercel's Environment Variables. For local work, fill in `.env.development` with a reachable PostgreSQL database and development/test credentials; it overrides `.env` while running `npm run dev`. Better Auth needs the database to start GitHub sign-in. Restart the dev server after changing env values. Do not use production credentials locally. Both files are ignored by Git.
+
+The local GitHub OAuth callback defaults to `http://localhost:3000/api/auth/callback/github`. If port 3000 is occupied and Next.js starts on another port, set `BETTER_AUTH_URL`, `NEXT_PUBLIC_APP_URL`, and `NEXT_PUBLIC_APP_BASE_URL` to that exact local origin and update the development OAuth app callback to match. The configured auth URL is used when generating the callback.
 
 For Docker Compose, run `docker compose --env-file .env.development up --build`; Compose uses the same local file for build-time configuration and container runtime values.
 

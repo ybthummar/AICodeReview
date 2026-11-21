@@ -27,11 +27,7 @@ if (
   );
 }
 
-const appUrl =
-  process.env.NODE_ENV === "development"
-    ? "http://localhost:3000"
-    : configuredAppUrl ||
-      "http://localhost:3000";
+const appUrl = configuredAppUrl || "http://localhost:3000";
 
 const vercelOrigin = process.env.VERCEL_URL
   ? `https://${process.env.VERCEL_URL}`
