@@ -1,11 +1,13 @@
 "use client";
 
+import { isValidElement } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { cn } from "@/lib/utils";
 
 export default function MarkdownView({ children }: { children: string }) {
   return (
-    <div className="max-w-none text-sm leading-relaxed text-slate-700">
+    <div className="min-w-0 wrap-anywhere text-sm leading-relaxed text-slate-700">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -46,29 +48,26 @@ export default function MarkdownView({ children }: { children: string }) {
             <th className="border-b border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700">{children}</th>
           ),
           td: ({ children }) => <td className="border-b border-slate-100 px-3 py-1.5">{children}</td>,
-          pre: ({ children }) => <>{children}</>,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          code({ className, children, ...props }: any) {
-            const match = /language-(\w+)/.exec(className || "");
-            const isBlock = Boolean(match) || String(children).includes("\n");
-
-            return isBlock ? (
-              <div className="relative my-3 overflow-hidden rounded-lg border border-slate-800 bg-slate-950">
+          pre: ({ children }) => {
+            const language = isValidElement<{ className?: string }>(children)
+              ? /language-([^\s]+)/.exec(children.props.className ?? "")?.[1]
+              : undefined;
+            return (
+              <div className="my-3 min-w-0 overflow-hidden rounded-lg border border-slate-800 bg-slate-950">
                 <div className="border-b border-slate-800 bg-slate-900 px-3 py-1.5 font-mono text-xs text-slate-400">
-                  {match ? match[1] : "code"}
+                  {language ?? "code"}
                 </div>
-                <pre className="overflow-x-auto p-3 font-mono text-xs leading-relaxed text-slate-100 sm:text-sm">
-                  <code className={className} {...props}>
-                    {children}
-                  </code>
+                <pre tabIndex={0} aria-label={language ? `${language} code block` : "Code block"} className="overflow-x-auto p-3 font-mono text-xs leading-relaxed text-slate-100 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue-400 sm:text-sm [&>code]:bg-transparent [&>code]:p-0 [&>code]:text-inherit">
+                  {children}
                 </pre>
               </div>
-            ) : (
-              <code className="rounded bg-slate-200/80 px-1.5 py-0.5 font-mono text-xs font-medium text-blue-800" {...props}>
-                {children}
-              </code>
             );
           },
+          code: ({ children, className }) => (
+            <code className={cn("rounded bg-slate-200/80 px-1.5 py-0.5 font-mono text-xs text-blue-800", className)}>
+              {children}
+            </code>
+          ),
         }}
       >
         {children}

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -23,14 +24,15 @@ import {
   reindexRepository,
 } from "@/module/chat/actions";
 import type { ChatSource } from "@/module/chat/lib/answer";
-import { USAGE_QUERY_KEY } from "@/module/billing/components/usage-meter";
+import UsageMeter, { USAGE_QUERY_KEY } from "@/module/billing/components/usage-meter";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
   sources?: ChatSource[];
-  indexed?: boolean;
 }
+
+const EMPTY_THREAD: Message[] = [];
 
 const STARTERS = [
   "Give me a high-level overview of how this project is structured.",
@@ -42,61 +44,36 @@ const STARTERS = [
 export default function ChatPage() {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState("");
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [threads, setThreads] = useState<Record<string, Message[]>>({});
   const [input, setInput] = useState("");
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
 
-  const { data: repositories, isLoading } = useQuery({
+  const repositoriesQuery = useQuery({
     queryKey: ["accessible-repositories", "VIEWER"],
     queryFn: async () => await getAccessibleRepositories("VIEWER"),
     staleTime: 1000 * 60,
   });
 
-  const repositoryId = selectedId || repositories?.[0]?.id || "";
-
-  const selected = useMemo(
-    () => repositories?.find((r) => r.id === repositoryId),
-    [repositories, repositoryId]
-  );
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages]);
+  const repositories = repositoriesQuery.data ?? [];
+  const selected = repositories.find((repository) => repository.id === selectedId) ?? repositories[0];
+  const repositoryId = selected?.id ?? "";
+  const messages = threads[repositoryId] ?? EMPTY_THREAD;
 
   const ask = useMutation({
-    mutationFn: async (question: string) => {
-      const history = messages.map((m) => ({ role: m.role, content: m.content }));
-      return await askCodebase({ repositoryId, question, history });
-    },
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: USAGE_QUERY_KEY });
-
-      if (!result.ok) {
-        toast.error(result.error);
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", content: `I could not answer that: ${result.error}` },
-        ]);
-        return;
-      }
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: result.data.answer,
-          sources: result.data.sources,
-          indexed: result.data.indexed,
-        },
-      ]);
-    },
-    onError: () => {
-      toast.error("The assistant is unavailable right now.");
+    mutationFn: (request: Parameters<typeof askCodebase>[0]) => askCodebase(request),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: USAGE_QUERY_KEY }),
+    onSuccess: (result, { repositoryId }) => {
+      if (!result.ok) return;
+      const { answer, sources } = result.data;
+      setThreads((previous) => ({
+        ...previous,
+        [repositoryId]: [...(previous[repositoryId] ?? EMPTY_THREAD), { role: "assistant", content: answer, sources }],
+      }));
     },
   });
 
   const reindex = useMutation({
-    mutationFn: async () => await reindexRepository(repositoryId),
+    mutationFn: (id: string) => reindexRepository(id),
     onSuccess: (result) => {
       if (result.ok) {
         toast.success("Re-index queued. It can take a few minutes for large repositories.");
@@ -104,49 +81,70 @@ export default function ChatPage() {
         toast.error(result.error);
       }
     },
+    onError: () => toast.error("Could not queue a re-index. Please try again."),
   });
+
+  const currentRequest = ask.variables?.repositoryId === repositoryId;
+  const answering = currentRequest && ask.isPending;
+  const askError = currentRequest && (ask.error
+    ? "The assistant is unavailable right now. Please try again."
+    : ask.data?.ok === false ? ask.data.error : null);
+
+  useEffect(() => {
+    const transcript = transcriptRef.current;
+    if (transcript) transcript.scrollTop = transcript.scrollHeight;
+  }, [messages, answering]);
 
   const send = (question: string) => {
     const text = question.trim();
     if (!text || ask.isPending || !repositoryId) return;
 
-    setMessages((prev) => [...prev, { role: "user", content: text }]);
+    setThreads((previous) => ({
+      ...previous,
+      [repositoryId]: [...(previous[repositoryId] ?? EMPTY_THREAD), { role: "user", content: text }],
+    }));
     setInput("");
-    ask.mutate(text);
+    ask.mutate({ repositoryId, question: text, history: messages.map(({ role, content }) => ({ role, content })) });
   };
 
   const changeRepository = (id: string) => {
     setSelectedId(id);
-    setMessages([]);
+    setInput("");
   };
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-5xl flex-col px-2 py-4 sm:px-6 lg:px-8">
-      <div className="mb-4 flex flex-col gap-3 border-b border-slate-200/70 pb-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="flex items-center gap-2 text-3xl font-bold tracking-tight text-slate-900">
-            <MessageSquareText className="h-7 w-7 text-blue-600" /> Ask your codebase
-          </h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Questions are answered from your indexed code, with file and line references.
-          </p>
+    <div className="mx-auto flex min-h-[calc(100dvh-3.5rem)] w-full max-w-5xl flex-col px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+      <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-700">
+            <MessageSquareText className="size-5" aria-hidden="true" />
+          </span>
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Ask your codebase</h1>
+            <p className="mt-1 text-sm text-slate-600">Explore indexed code with file and line references.</p>
+          </div>
         </div>
+        <UsageMeter compact kind="chats" />
+      </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+      <Card className="flex min-w-0 flex-1 flex-col gap-0 overflow-hidden border-slate-200 bg-white p-0">
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 px-4 py-3 sm:px-6">
+          <label htmlFor="chat-repository" className="text-sm font-medium text-slate-700">Repository</label>
           <select
+            id="chat-repository"
             value={repositoryId}
             onChange={(e) => changeRepository(e.target.value)}
-            disabled={isLoading || !repositories?.length}
-            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            disabled={!repositories.length}
+            className="h-10 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-base text-slate-800 focus-visible:outline-2 focus-visible:outline-blue-500 sm:max-w-xs sm:text-sm"
           >
-            {repositories?.length ? (
+            {repositories.length ? (
               repositories.map((r) => (
                 <option key={r.id} value={r.id}>
                   {r.fullName}
                 </option>
               ))
             ) : (
-              <option value="">No repositories connected</option>
+              <option value="">{repositoriesQuery.isPending ? "Loading repositories..." : "Select a repository"}</option>
             )}
           </select>
 
@@ -154,7 +152,7 @@ export default function ChatPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => reindex.mutate()}
+              onClick={() => reindex.mutate(repositoryId)}
               disabled={reindex.isPending}
               className="gap-1.5"
             >
@@ -163,12 +161,23 @@ export default function ChatPage() {
             </Button>
           )}
         </div>
-      </div>
-
-      <Card className="flex flex-1 flex-col gap-0 overflow-hidden border-slate-200/80 bg-white p-0 shadow-sm">
-        <div className="flex-1 space-y-5 overflow-y-auto p-4 sm:p-6" style={{ maxHeight: "calc(100vh - 320px)", minHeight: 320 }}>
-          {messages.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center gap-4 py-10 text-center">
+        <div ref={transcriptRef} role="log" aria-label="Codebase conversation" className="min-h-64 max-h-[max(19rem,calc(100dvh-21rem))] flex-1 space-y-5 overflow-y-auto overscroll-contain p-4 sm:p-6">
+          {repositoriesQuery.isError ? (
+            <div className="flex flex-col items-center gap-3 py-12 text-center text-sm text-slate-700" role="alert">
+              Repositories could not be loaded.
+              <Button variant="outline" size="sm" onClick={() => void repositoriesQuery.refetch()}>Retry</Button>
+            </div>
+          ) : repositoriesQuery.isPending ? (
+            <div className="flex items-center justify-center gap-2 py-16 text-sm text-slate-600" role="status">
+              <Loader2 className="size-4 animate-spin" /> Loading repositories...
+            </div>
+          ) : !repositoryId ? (
+            <div className="flex flex-col items-center gap-3 py-12 text-center text-sm text-slate-700">
+              Connect a repository to ask questions about its code.
+              <Button asChild variant="outline" size="sm"><Link href="/dashboard/repositories">Connect repository</Link></Button>
+            </div>
+          ) : messages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-4 py-5 text-center sm:py-8">
               <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
                 <Sparkles className="h-7 w-7" />
               </div>
@@ -185,7 +194,7 @@ export default function ChatPage() {
                     type="button"
                     onClick={() => send(starter)}
                     disabled={!repositoryId || ask.isPending}
-                    className="rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-3 text-left text-sm text-slate-700 transition-colors hover:border-blue-300 hover:bg-blue-50/50 disabled:opacity-50"
+                    className="cursor-pointer rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2.5 text-left text-sm text-slate-700 transition-colors hover:border-blue-300 hover:bg-blue-50/50 focus-visible:outline-2 focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {starter}
                   </button>
@@ -202,12 +211,13 @@ export default function ChatPage() {
                 )}
 
                 <div
-                  className={`max-w-[85%] rounded-2xl px-4 py-3 ${
+                  className={`min-w-0 max-w-[88%] wrap-anywhere rounded-2xl px-3 py-2.5 sm:px-4 sm:py-3 ${
                     message.role === "user"
                       ? "bg-blue-600 text-white"
                       : "border border-slate-200 bg-slate-50/60"
                   }`}
                 >
+                  <span className="sr-only">{message.role === "user" ? "You" : "RepoPilot"}</span>
                   {message.role === "user" ? (
                     <p className="whitespace-pre-wrap text-sm">{message.content}</p>
                   ) : (
@@ -224,12 +234,11 @@ export default function ChatPage() {
                             href={source.url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 font-mono text-xs text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700"
+                            className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 font-mono text-xs text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700"
                           >
-                            <FileCode className="h-3 w-3" />
-                            {source.path}
-                            {source.startLine ? `:${source.startLine}-${source.endLine}` : ""}
-                            <ExternalLink className="h-3 w-3 opacity-60" />
+                            <FileCode className="size-3 shrink-0" />
+                            <span className="wrap-anywhere">{source.path}{source.startLine ? `:${source.startLine}-${source.endLine}` : ""}</span>
+                            <ExternalLink className="size-3 shrink-0 opacity-60" />
                           </a>
                         ))}
                       </div>
@@ -246,17 +255,20 @@ export default function ChatPage() {
             ))
           )}
 
-          {ask.isPending && (
-            <div className="flex items-center gap-3 text-sm text-slate-500">
+          {answering && (
+            <div className="flex items-center gap-3 text-sm text-slate-600" role="status">
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white">
                 <Loader2 className="h-4 w-4 animate-spin" />
               </div>
-              Searching the codebase and reading the relevant files...
+              Searching the codebase...
             </div>
           )}
-          <div ref={bottomRef} />
         </div>
 
+        {askError && <p role="alert" className="border-t border-red-100 bg-red-50 px-4 py-2.5 text-sm text-red-800">{askError}</p>}
+        {ask.isPending && !currentRequest && (
+          <p role="status" className="border-t border-slate-200 px-4 py-2.5 text-sm text-slate-600">A question is running in another repository.</p>
+        )}
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -264,20 +276,22 @@ export default function ChatPage() {
           }}
           className="flex items-end gap-2 border-t border-slate-200 bg-slate-50/60 p-3 sm:p-4"
         >
+          <label htmlFor="chat-question" className="sr-only">Question</label>
           <textarea
+            id="chat-question"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 send(input);
               }
             }}
             rows={2}
             maxLength={1000}
-            placeholder={repositoryId ? "Ask anything about this repository (Shift+Enter for a new line)" : "Connect a repository first"}
+            placeholder={repositoryId ? "Ask about this repository" : "Connect a repository first"}
             disabled={!repositoryId}
-            className="flex-1 resize-none rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-60"
+            className="min-w-0 flex-1 resize-none rounded-lg border border-slate-300 bg-white px-3 py-2 text-base focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-60 sm:text-sm"
           />
           <Button
             type="submit"

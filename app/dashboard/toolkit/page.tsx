@@ -1,31 +1,21 @@
 "use client";
 
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useState, type ReactNode } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowUpRight, Check, Copy, FileText, FlaskConical, Github, Loader2, Megaphone, Search, ShieldCheck, Sparkles, Upload, Wrench } from "lucide-react";
 import { toast } from "sonner";
-import {
-  Check,
-  Copy,
-  FileText,
-  FlaskConical,
-  Loader2,
-  Megaphone,
-  Search,
-  ShieldCheck,
-  Sparkles,
-  Upload,
-  Wrench,
-} from "lucide-react";
+import MarkdownView from "@/components/markdown-view";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import MarkdownView from "@/components/markdown-view";
 import UsageMeter, { USAGE_QUERY_KEY } from "@/module/billing/components/usage-meter";
 import { SEVERITY_STYLES } from "@/module/review/components/insights-panel";
 import { SEVERITY_LABELS } from "@/module/review/lib/insights";
 import { getAccessibleRepositories } from "@/module/team/actions";
+import { hasRole } from "@/module/team/lib/roles";
 import {
   applyPullRequestDescription,
   generatePullRequestDescription,
@@ -35,425 +25,381 @@ import {
   investigateRepositoryIssue,
   scanPullRequestSecurity,
 } from "@/module/toolkit/actions";
-import { hasRole } from "@/module/team/lib/roles";
 
-type TabId = "description" | "tests" | "release" | "security" | "issue";
+const TOOLS = [
+  {
+    id: "description", label: "PR Description", icon: FileText, needsPr: true,
+    help: "Draft a title and summary from the pull request diff.", action: "Draft description", pending: "Drafting description...",
+  },
+  {
+    id: "tests", label: "Unit Tests", icon: FlaskConical, needsPr: true,
+    help: "Suggest tests for the changes in a pull request.", action: "Generate tests", pending: "Generating tests...",
+  },
+  {
+    id: "release", label: "Release Notes", icon: Megaphone, needsPr: false,
+    help: "Summarize pull requests merged during the selected period.", action: "Generate notes", pending: "Generating release notes...",
+  },
+  {
+    id: "security", label: "Security Scan", icon: ShieldCheck, needsPr: true,
+    help: "Check changes for leaked secrets and dependencies with known vulnerabilities.", action: "Run scan", pending: "Scanning changes...",
+  },
+  {
+    id: "issue", label: "Issue Investigation", icon: Search, needsPr: false,
+    help: "Analyze a GitHub issue using its discussion and relevant indexed code.", action: "Investigate issue", pending: "Investigating issue...",
+  },
+] as const;
 
-const TABS: { id: TabId; label: string; icon: React.ElementType; needsPr: boolean }[] = [
-  { id: "description", label: "PR Description", icon: FileText, needsPr: true },
-  { id: "tests", label: "Test Generator", icon: FlaskConical, needsPr: true },
-  { id: "release", label: "Release Notes", icon: Megaphone, needsPr: false },
-  { id: "security", label: "Security Scan", icon: ShieldCheck, needsPr: true },
-  { id: "issue", label: "Issue Investigation", icon: Search, needsPr: false },
-];
+type ToolId = (typeof TOOLS)[number]["id"];
+type RunTarget = { repositoryId: string; value: number };
+type Draft = { target: RunTarget; title: string; body: string };
+
+const controlClass = "h-11 w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-base text-slate-800 outline-none focus-visible:border-blue-600 focus-visible:ring-2 focus-visible:ring-blue-500/30 disabled:opacity-60 sm:text-sm";
+const fieldLabel = "mb-2 block text-sm font-medium text-slate-700";
+const resultHeader = "flex flex-col gap-3 px-4 sm:flex-row sm:items-start sm:justify-between sm:px-6";
+
+function targetMatches(previous: RunTarget | undefined, current: RunTarget) {
+  return previous?.repositoryId === current.repositoryId && previous.value === current.value;
+}
 
 function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
+  const [copiedText, setCopiedText] = useState("");
+  const copied = copiedText === text && Boolean(text);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedText(text);
+      toast.success("Copied to clipboard");
+    } catch {
+      toast.error("Could not copy. Select the text to copy it manually.");
+    }
+  }
 
   return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      onClick={() => {
-        navigator.clipboard.writeText(text);
-        setCopied(true);
-        toast.success("Copied to clipboard");
-        setTimeout(() => setCopied(false), 2000);
-      }}
-      className="h-8 gap-1.5 text-xs"
-    >
-      {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+    <Button type="button" variant="outline" size="sm" onClick={() => void copy()} className="self-start">
+      {copied ? <Check className="text-emerald-600" /> : <Copy />}
       {copied ? "Copied" : "Copy"}
     </Button>
+  );
+}
+
+function MarkdownResult({ title, detail, markdown }: { title: string; detail: ReactNode; markdown: string }) {
+  return (
+    <Card className="gap-4 border-slate-200 bg-white">
+      <CardHeader className={resultHeader}>
+        <div className="min-w-0 space-y-1.5">
+          <CardTitle className="wrap-anywhere text-lg">{title}</CardTitle>
+          <CardDescription>{detail}</CardDescription>
+        </div>
+        <CopyButton text={markdown} />
+      </CardHeader>
+      <CardContent className="min-w-0 px-4 sm:px-6"><MarkdownView>{markdown}</MarkdownView></CardContent>
+    </Card>
   );
 }
 
 function ToolkitContent() {
   const params = useSearchParams();
   const queryClient = useQueryClient();
-
-  const [tab, setTab] = useState<TabId>(
-    (TABS.find((t) => t.id === params.get("tab"))?.id as TabId | undefined) ?? "description"
-  );
+  const [toolId, setToolId] = useState<ToolId>(() => TOOLS.find(({ id }) => id === params.get("tab"))?.id ?? "description");
   const [repoOverride, setRepoOverride] = useState(params.get("repo") ?? "");
   const [prNumber, setPrNumber] = useState(params.get("pr") ?? "");
   const [issueNumber, setIssueNumber] = useState(params.get("issue") ?? "");
   const [days, setDays] = useState("7");
+  const [draft, setDraft] = useState<Draft>();
+  const [preview, setPreview] = useState(false);
 
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [previewBody, setPreviewBody] = useState(false);
-  const [testsMarkdown, setTestsMarkdown] = useState("");
-  const [releaseMarkdown, setReleaseMarkdown] = useState("");
-  const [releaseCount, setReleaseCount] = useState<number | null>(null);
-
-  const { data: repositories } = useQuery({
+  const tool = TOOLS.find(({ id }) => id === toolId) ?? TOOLS[0];
+  const repositoriesQuery = useQuery({
     queryKey: ["accessible-repositories", "VIEWER"],
-    queryFn: async () => await getAccessibleRepositories("VIEWER"),
-    staleTime: 1000 * 60,
+    queryFn: () => getAccessibleRepositories("VIEWER"),
+    staleTime: 60_000,
   });
-
-  const repositoryId = repoOverride || repositories?.[0]?.id || "";
-
-  const repository = useMemo(
-    () => repositories?.find((r) => r.id === repositoryId),
-    [repositories, repositoryId]
-  );
-  const canGenerate = repository ? hasRole(repository.role, "MEMBER") : false;
-
-  const { data: pullRequests, isLoading: isLoadingPRs } = useQuery({
+  const repositories = repositoriesQuery.data ?? [];
+  const repositoryId = repoOverride || repositories[0]?.id || "";
+  const repository = repositories.find((item) => item.id === repositoryId);
+  const canGenerate = Boolean(repository && hasRole(repository.role, "MEMBER"));
+  const pulls = useQuery({
     queryKey: ["toolkit-prs", repositoryId],
     queryFn: async () => {
       const result = await getToolkitPullRequests(repositoryId);
       if (!result.ok) throw new Error(result.error);
       return result.data;
     },
-    enabled: Boolean(repositoryId),
-    staleTime: 1000 * 30,
+    enabled: Boolean(repository) && tool.needsPr,
+    staleTime: 30_000,
   });
 
-  const activeTab = TABS.find((t) => t.id === tab) ?? TABS[0];
-  const prValue = Number.parseInt(prNumber, 10);
-  const hasPr = Number.isInteger(prValue) && prValue > 0;
-  const issueValue = Number(issueNumber);
-  const hasIssue = Number.isSafeInteger(issueValue) && issueValue > 0;
-
-  const afterRun = () => queryClient.invalidateQueries({ queryKey: USAGE_QUERY_KEY });
-
+  const refreshUsage = () => void queryClient.invalidateQueries({ queryKey: USAGE_QUERY_KEY });
   const describe = useMutation({
-    mutationFn: async () => await generatePullRequestDescription(repositoryId, prValue),
-    onSuccess: (result) => {
-      afterRun();
-      if (!result.ok) return void toast.error(result.error);
-      setTitle(result.data.title);
-      setBody(result.data.body);
-      setPreviewBody(false);
-      toast.success("Description generated");
+    mutationFn: ({ repositoryId, value }: RunTarget) => generatePullRequestDescription(repositoryId, value),
+    onSettled: refreshUsage,
+    onSuccess: (result, target) => {
+      if (result.ok) {
+        setDraft({ target, ...result.data });
+        setPreview(false);
+      }
     },
   });
-
+  const tests = useMutation({
+    mutationFn: ({ repositoryId, value }: RunTarget) => generateTestsForPullRequest(repositoryId, value),
+    onSettled: refreshUsage,
+  });
+  const release = useMutation({
+    mutationFn: ({ repositoryId, value }: RunTarget) => generateReleaseNotes(repositoryId, value),
+    onSettled: refreshUsage,
+  });
+  const scan = useMutation({
+    mutationFn: ({ repositoryId, value }: RunTarget) => scanPullRequestSecurity(repositoryId, value),
+    onSettled: refreshUsage,
+  });
+  const investigate = useMutation({
+    mutationFn: ({ repositoryId, value }: RunTarget) => investigateRepositoryIssue(repositoryId, value),
+    onSettled: refreshUsage,
+  });
   const apply = useMutation({
-    mutationFn: async () => await applyPullRequestDescription(repositoryId, prValue, title, body),
-    onSuccess: (result) => {
-      if (result.ok) toast.success("Pull request updated on GitHub");
+    mutationFn: ({ target, title, body }: Draft) => applyPullRequestDescription(target.repositoryId, target.value, title, body),
+    onSuccess: (result, { target }) => {
+      if (result.ok) toast.success("Pull request #" + target.value + " updated on GitHub");
       else toast.error(result.error);
     },
+    onError: () => toast.error("Could not update the pull request. Please try again."),
   });
 
-  const tests = useMutation({
-    mutationFn: async () => await generateTestsForPullRequest(repositoryId, prValue),
-    onSuccess: (result) => {
-      afterRun();
-      if (!result.ok) return void toast.error(result.error);
-      setTestsMarkdown(result.data.markdown);
-      toast.success("Tests generated");
-    },
-  });
-
-  const release = useMutation({
-    mutationFn: async () => await generateReleaseNotes(repositoryId, Number(days)),
-    onSuccess: (result) => {
-      afterRun();
-      if (!result.ok) return void toast.error(result.error);
-      setReleaseMarkdown(result.data.markdown);
-      setReleaseCount(result.data.prCount);
-    },
-  });
-
-  const scan = useMutation({
-    mutationFn: async () => await scanPullRequestSecurity(repositoryId, prValue),
-    onSuccess: (result) => {
-      if (!result.ok) toast.error(result.error);
-    },
-  });
-
-  const investigate = useMutation({
-    mutationFn: ({ repoId, number }: { repoId: string; number: number }) => investigateRepositoryIssue(repoId, number),
-    onSuccess: (result) => {
-      afterRun();
-      if (!result.ok) toast.error(result.error);
-    },
-    onError: () => toast.error("Could not investigate the issue. Please try again."),
-  });
-
-  const scanResult = scan.data && scan.data.ok ? scan.data.data : null;
-  const issueResult = investigate.data?.ok && investigate.variables?.repoId === repositoryId &&
-    investigate.variables.number === issueValue ? investigate.data.data : null;
-
-  const busy =
-    (tab === "description" && describe.isPending) ||
-    (tab === "tests" && tests.isPending) ||
-    (tab === "release" && release.isPending) ||
-    (tab === "security" && scan.isPending) ||
-    (tab === "issue" && investigate.isPending);
-
-  const runDisabled =
-    busy ||
-    !repositoryId ||
-    (activeTab.needsPr && !hasPr) ||
-    (tab === "issue" && !hasIssue) ||
-    (tab !== "security" && !canGenerate);
-
-  const run = () => {
-    if (tab === "description") describe.mutate();
-    else if (tab === "tests") tests.mutate();
-    else if (tab === "release") release.mutate();
-    else if (tab === "issue") investigate.mutate({ repoId: repositoryId, number: issueValue });
-    else scan.mutate();
-  };
+  const run = { description: describe, tests, release, security: scan, issue: investigate }[toolId];
+  const value = Number(tool.needsPr ? prNumber : toolId === "issue" ? issueNumber : days);
+  const target = { repositoryId, value };
+  const hasTarget = Number.isSafeInteger(value) && value > 0;
+  const currentRun = targetMatches(run.variables, target);
+  const currentDraft = draft && targetMatches(draft.target, target) ? draft : undefined;
+  const runError = currentRun && (run.error
+    ? "Could not complete this request. Please try again."
+    : run.data?.ok === false ? run.data.error : null);
+  const testsResult = targetMatches(tests.variables, target) && tests.data?.ok ? tests.data.data : null;
+  const releaseResult = targetMatches(release.variables, target) && release.data?.ok ? release.data.data : null;
+  const issueResult = targetMatches(investigate.variables, target) && investigate.data?.ok ? investigate.data.data : null;
+  const scanResult = targetMatches(scan.variables, target) && scan.data?.ok ? scan.data.data : null;
+  const runDisabled = run.isPending || !repository || !hasTarget || (toolId !== "security" && !canGenerate);
 
   return (
-    <div className="mx-auto min-h-screen max-w-6xl space-y-6 px-2 py-4 sm:px-6 lg:px-8">
-      <div className="flex flex-col gap-3 border-b border-slate-200/70 pb-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="flex items-center gap-2 text-3xl font-bold tracking-tight text-slate-900">
-            <Wrench className="h-7 w-7 text-blue-600" /> AI Toolkit
-          </h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Generate descriptions, tests and release notes, scan pull requests, or investigate a GitHub issue.
-          </p>
+    <div className="mx-auto w-full max-w-6xl space-y-5 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-700">
+            <Wrench className="size-5" aria-hidden="true" />
+          </span>
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">AI Toolkit</h1>
+            <p className="mt-1 text-sm text-slate-600">Tools for pull requests, releases, and GitHub issues.</p>
+          </div>
         </div>
+        <UsageMeter compact kind="toolkit" />
       </div>
 
-      <UsageMeter />
+      <div role="group" aria-label="Toolkit tools" className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
+        {TOOLS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            aria-pressed={toolId === item.id}
+            onClick={() => setToolId(item.id)}
+            className="flex min-h-14 min-w-0 cursor-pointer items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-left text-sm font-semibold leading-snug text-slate-700 shadow-xs transition-colors hover:border-blue-300 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 aria-pressed:border-blue-400 aria-pressed:bg-blue-50 aria-pressed:text-blue-800"
+          >
+            <item.icon className="size-4 shrink-0" aria-hidden="true" />
+            {item.label}
+          </button>
+        ))}
+      </div>
 
-      <Card className="border-slate-200/80 bg-white shadow-sm">
-        <CardContent className="space-y-4">
-          <div className="flex w-fit flex-wrap items-center gap-1 rounded-xl bg-slate-200/70 p-1">
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => setTab(t.id)}
-                className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-all ${
-                  tab === t.id ? "bg-white text-blue-600 shadow-sm" : "text-slate-600 hover:text-slate-900"
-                }`}
-              >
-                <t.icon className="h-4 w-4" />
-                {t.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-600">Repository</label>
-              <select
-                value={repositoryId}
-                onChange={(e) => {
-                  setRepoOverride(e.target.value);
-                  setPrNumber("");
-                  setIssueNumber("");
-                }}
-                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              >
-                {repositories?.length ? (
-                  repositories.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.fullName}
-                    </option>
-                  ))
-                ) : (
-                  <option value="">No repositories connected</option>
-                )}
-              </select>
+      <Card className="@container gap-4 border-slate-200 bg-white">
+        <CardHeader className="gap-1 px-4 sm:px-6">
+          <h2 className="text-lg font-semibold text-slate-900">{tool.label}</h2>
+          <CardDescription className="text-slate-600">{tool.help}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4 px-4 sm:px-6">
+          {repositoriesQuery.isError ? (
+            <div className="flex flex-wrap items-center gap-3 text-sm text-slate-700" role="alert">
+              Repositories could not be loaded.
+              <Button type="button" variant="outline" size="sm" onClick={() => void repositoriesQuery.refetch()}>Retry</Button>
             </div>
-
-            {activeTab.needsPr ? (
-              <div>
-                <label className="mb-1.5 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-600">
-                  Pull request
-                  {isLoadingPRs && <Loader2 className="h-3 w-3 animate-spin text-blue-600" />}
-                </label>
-                <select
-                  value={pullRequests?.some((p) => String(p.number) === prNumber) ? prNumber : ""}
-                  onChange={(e) => setPrNumber(e.target.value)}
-                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                >
-                  <option value="">Select a pull request</option>
-                  {pullRequests?.map((p) => (
-                    <option key={p.number} value={p.number}>
-                      #{p.number} {p.title} ({p.state})
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ) : tab === "issue" ? (
-              <div>
-                <label htmlFor="issue-number" className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-600">GitHub issue number</label>
-                <Input id="issue-number" type="number" min={1} step={1} placeholder="128" value={issueNumber} onChange={(e) => setIssueNumber(e.target.value)} />
-              </div>
-            ) : (
-              <div>
-                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-600">Period</label>
-                <select
-                  value={days}
-                  onChange={(e) => setDays(e.target.value)}
-                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                >
-                  <option value="7">Last 7 days</option>
-                  <option value="14">Last 14 days</option>
-                  <option value="30">Last 30 days</option>
-                  <option value="60">Last 60 days</option>
-                </select>
-              </div>
-            )}
-
-            <Button
-              onClick={run}
-              disabled={runDisabled}
-              className="h-10 gap-2 bg-blue-600 text-white hover:bg-blue-700"
+          ) : !repositoriesQuery.isPending && repositories.length === 0 ? (
+            <div className="flex flex-wrap items-center gap-3 rounded-xl border border-dashed border-slate-300 p-4 text-sm text-slate-600">
+              Connect a repository to use this tool.
+              <Button asChild variant="outline" size="sm">
+                <Link href="/dashboard/repositories"><Github /> Connect repository</Link>
+              </Button>
+            </div>
+          ) : (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!runDisabled) run.mutate(target);
+              }}
+              className="grid min-w-0 gap-4 @lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] @2xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] @2xl:items-end"
             >
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              {tab === "security" ? "Run scan" : tab === "issue" ? "Investigate" : "Generate"}
-            </Button>
-          </div>
+              <div className="min-w-0">
+                <label htmlFor="toolkit-repository" className={fieldLabel}>Repository</label>
+                <select
+                  id="toolkit-repository"
+                  value={repositoryId}
+                  disabled={repositoriesQuery.isPending}
+                  onChange={(event) => {
+                    setRepoOverride(event.target.value);
+                    setPrNumber("");
+                    setIssueNumber("");
+                  }}
+                  className={controlClass}
+                >
+                  {!repository && <option value={repositoryId}>{repositoriesQuery.isPending ? "Loading repositories..." : "Select a repository"}</option>}
+                  {repositories.map(({ id, fullName }) => <option key={id} value={id}>{fullName}</option>)}
+                </select>
+              </div>
 
-          {tab !== "security" && repository && !canGenerate && (
-            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              You have view-only access to this repository, so generation is disabled.
+              {tool.needsPr ? (
+                <div className="min-w-0">
+                  <label htmlFor="toolkit-pr" className={fieldLabel}>Pull request</label>
+                  <select
+                    id="toolkit-pr"
+                    value={hasTarget ? prNumber : ""}
+                    onChange={(event) => setPrNumber(event.target.value)}
+                    disabled={!repository || pulls.isLoading}
+                    className={controlClass}
+                  >
+                    <option value="">{pulls.isLoading ? "Loading pull requests..." : pulls.data?.length ? "Select a pull request" : "No pull requests available"}</option>
+                    {hasTarget && !pulls.data?.some((pr) => String(pr.number) === prNumber) && <option value={prNumber}>Pull request #{value}</option>}
+                    {pulls.data?.map((pr) => (
+                      <option key={pr.number} value={pr.number}>#{pr.number} {pr.title} ({pr.state})</option>
+                    ))}
+                  </select>
+                </div>
+              ) : toolId === "issue" ? (
+                <div className="min-w-0">
+                  <label htmlFor="toolkit-issue" className={fieldLabel}>GitHub issue number</label>
+                  <Input id="toolkit-issue" type="number" min={1} step={1} placeholder="128" value={issueNumber} onChange={(event) => setIssueNumber(event.target.value)} className={controlClass} />
+                </div>
+              ) : (
+                <div className="min-w-0">
+                  <label htmlFor="toolkit-period" className={fieldLabel}>Period</label>
+                  <select id="toolkit-period" value={days} onChange={(event) => setDays(event.target.value)} className={controlClass}>
+                    {[7, 14, 30, 60].map((period) => <option value={period} key={period}>Last {period} days</option>)}
+                  </select>
+                </div>
+              )}
+
+              <Button type="submit" disabled={runDisabled} className="h-11 w-full rounded-lg bg-blue-600 text-white hover:bg-blue-700 @lg:col-span-2 @2xl:col-span-1 @2xl:w-auto">
+                {run.isPending ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                {run.isPending ? tool.pending : tool.action}
+              </Button>
+            </form>
+          )}
+
+          {tool.needsPr && repository && pulls.isError && (
+            <div className="flex flex-wrap items-center gap-3 text-sm text-slate-700" role="alert">
+              Pull requests could not be loaded.
+              <Button type="button" variant="outline" size="sm" onClick={() => void pulls.refetch()}>Retry</Button>
+            </div>
+          )}
+          {repository && toolId !== "security" && !canGenerate && (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+              This repository requires member access to run this tool.
             </p>
           )}
+          {runError && <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-800" role="alert">{runError}</p>}
+          <p role="status" className="sr-only">
+            {run.isPending ? tool.pending : currentRun && run.data?.ok ? "Result ready." : ""}
+          </p>
         </CardContent>
       </Card>
 
-      {tab === "description" && (title || body) && (
-        <Card className="border-slate-200/80 bg-white shadow-sm">
-          <CardHeader className="flex flex-row items-center justify-between gap-3">
-            <div>
+      {toolId === "description" && currentDraft && repository && (
+        <Card className="gap-4 border-slate-200 bg-white">
+          <CardHeader className={resultHeader}>
+            <div className="min-w-0 space-y-1.5">
               <CardTitle className="text-lg">Generated description</CardTitle>
-              <CardDescription>Edit anything, then copy it or push it straight to the pull request.</CardDescription>
+              <CardDescription className="wrap-anywhere">{repository.fullName} &middot; PR #{currentDraft.target.value}</CardDescription>
             </div>
-            <div className="flex items-center gap-2">
-              <CopyButton text={`${title}\n\n${body}`} />
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <CopyButton text={currentDraft.title + "\n\n" + currentDraft.body} />
               <Button
                 size="sm"
-                onClick={() => apply.mutate()}
-                disabled={apply.isPending || !title.trim() || !canGenerate}
-                className="h-8 gap-1.5 bg-emerald-600 text-xs text-white hover:bg-emerald-700"
+                onClick={() => apply.mutate(currentDraft)}
+                disabled={apply.isPending || describe.isPending || !currentDraft.title.trim() || !canGenerate}
+                className="bg-blue-600 text-white hover:bg-blue-700"
               >
-                {apply.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-                Apply to PR
+                {apply.isPending ? <Loader2 className="animate-spin" /> : <Upload />}
+                Apply to PR #{currentDraft.target.value}
               </Button>
             </div>
           </CardHeader>
-          <CardContent className="space-y-3">
-            <Input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={256} className="font-semibold" />
-
-            <div className="flex gap-1">
-              {[
-                { label: "Edit", value: false },
-                { label: "Preview", value: true },
-              ].map((option) => (
-                <button
-                  key={option.label}
-                  type="button"
-                  onClick={() => setPreviewBody(option.value)}
-                  className={`rounded-md px-3 py-1 text-xs font-semibold ${
-                    previewBody === option.value ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600"
-                  }`}
-                >
-                  {option.label}
-                </button>
-              ))}
+          <CardContent className="min-w-0 space-y-4 px-4 sm:px-6">
+            <div>
+              <label htmlFor="toolkit-title" className={fieldLabel}>Title</label>
+              <Input id="toolkit-title" maxLength={256} value={currentDraft.title} onChange={(event) => setDraft({ ...currentDraft, title: event.target.value })} className="h-10 font-semibold" />
             </div>
-
-            {previewBody ? (
-              <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-4">
-                <MarkdownView>{body}</MarkdownView>
+            <div>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <label htmlFor={preview ? undefined : "toolkit-description"} className="text-sm font-medium text-slate-700">Description</label>
+                <div role="group" aria-label="Description view" className="flex gap-1 rounded-lg bg-slate-100 p-1">
+                  {[false, true].map((mode) => (
+                    <button key={String(mode)} type="button" aria-pressed={preview === mode} onClick={() => setPreview(mode)} className="cursor-pointer rounded-md px-3 py-1 text-xs font-semibold text-slate-600 aria-pressed:bg-white aria-pressed:text-blue-700 aria-pressed:shadow-xs">
+                      {mode ? "Preview" : "Edit"}
+                    </button>
+                  ))}
+                </div>
               </div>
-            ) : (
-              <textarea
-                value={body}
-                onChange={(e) => setBody(e.target.value)}
-                rows={16}
-                className="w-full rounded-lg border border-slate-300 bg-white p-3 font-mono text-xs leading-relaxed focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            )}
+              {preview ? (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <MarkdownView>{currentDraft.body}</MarkdownView>
+                </div>
+              ) : (
+                <textarea id="toolkit-description" rows={12} value={currentDraft.body} onChange={(event) => setDraft({ ...currentDraft, body: event.target.value })} className="w-full resize-y rounded-lg border border-slate-300 bg-white p-3 font-mono text-sm leading-relaxed focus-visible:outline-2 focus-visible:outline-blue-500" />
+              )}
+            </div>
           </CardContent>
         </Card>
       )}
 
-      {tab === "tests" && testsMarkdown && (
-        <Card className="border-slate-200/80 bg-white shadow-sm">
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <CardTitle className="text-lg">Suggested tests</CardTitle>
-              <CardDescription>Review before committing. Generated tests may need small adjustments to imports.</CardDescription>
-            </div>
-            <CopyButton text={testsMarkdown} />
-          </CardHeader>
-          <CardContent>
-            <MarkdownView>{testsMarkdown}</MarkdownView>
-          </CardContent>
-        </Card>
+      {toolId === "tests" && testsResult && (
+        <MarkdownResult title="Suggested tests" detail="Review imports and assumptions before committing these tests." markdown={testsResult.markdown} />
+      )}
+      {toolId === "release" && releaseResult && (
+        <MarkdownResult title="Release notes" detail={releaseResult.prCount + " merged pull request" + (releaseResult.prCount === 1 ? "" : "s")} markdown={releaseResult.markdown} />
+      )}
+      {toolId === "issue" && issueResult && (
+        <MarkdownResult title={issueResult.title} markdown={issueResult.markdown} detail={
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            {issueResult.usedAgent ? "OpenAI issue agent" : "AI investigation"}
+            <a href={issueResult.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-blue-700 underline underline-offset-2">
+              GitHub issue #{value} <ArrowUpRight className="size-3.5" aria-hidden="true" />
+            </a>
+          </span>
+        } />
       )}
 
-      {tab === "release" && releaseMarkdown && (
-        <Card className="border-slate-200/80 bg-white shadow-sm">
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <CardTitle className="text-lg">Release notes</CardTitle>
-              <CardDescription>
-                {releaseCount === null ? "" : `Built from ${releaseCount} merged pull request${releaseCount === 1 ? "" : "s"}.`}
-              </CardDescription>
-            </div>
-            <CopyButton text={releaseMarkdown} />
-          </CardHeader>
-          <CardContent>
-            <MarkdownView>{releaseMarkdown}</MarkdownView>
-          </CardContent>
-        </Card>
-      )}
-
-      {tab === "issue" && issueResult && (
-        <Card className="border-slate-200/80 bg-white shadow-sm">
-          <CardHeader className="flex flex-row items-center justify-between gap-3">
-            <div>
-              <CardTitle className="text-lg">{issueResult.title}</CardTitle>
-              <CardDescription>
-                {issueResult.usedAgent ? "OpenAI issue agent" : "AI investigation"} · {" "}
-                <a className="underline" href={issueResult.url} target="_blank" rel="noreferrer">Open issue on GitHub</a>
-              </CardDescription>
-            </div>
-            <CopyButton text={issueResult.markdown} />
-          </CardHeader>
-          <CardContent><MarkdownView>{issueResult.markdown}</MarkdownView></CardContent>
-        </Card>
-      )}
-
-      {tab === "security" && scanResult && (
-        <Card className="border-slate-200/80 bg-white shadow-sm">
-          <CardHeader>
-            <CardTitle className="text-lg">Scan results for {scanResult.prTitle}</CardTitle>
+      {toolId === "security" && scanResult && (
+        <Card className="gap-4 border-slate-200 bg-white">
+          <CardHeader className="px-4 sm:px-6">
+            <CardTitle className="wrap-anywhere text-lg">Scan results for {scanResult.prTitle}</CardTitle>
             <CardDescription>
-              {scanResult.filesScanned} file{scanResult.filesScanned === 1 ? "" : "s"} scanned,{" "}
-              {scanResult.dependenciesChecked} dependenc{scanResult.dependenciesChecked === 1 ? "y" : "ies"} checked against the OSV database.
+              {scanResult.filesScanned} file{scanResult.filesScanned === 1 ? "" : "s"} scanned and{" "}
+              {scanResult.dependenciesChecked} dependenc{scanResult.dependenciesChecked === 1 ? "y" : "ies"} checked.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent className="min-w-0 space-y-3 px-4 sm:px-6">
             {scanResult.findings.length === 0 ? (
-              <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-                <ShieldCheck className="h-4 w-4" /> No leaked secrets or vulnerable dependencies were found in this change.
+              <div className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-800">
+                <ShieldCheck className="mt-0.5 size-4 shrink-0" /> No leaked secrets or vulnerable dependencies found in this change.
               </div>
             ) : (
               scanResult.findings.map((finding, index) => (
-                <div key={`${finding.title}-${index}`} className="rounded-lg border border-slate-200 bg-slate-50/60 p-3.5">
+                <div key={finding.title + index} className="rounded-lg border border-slate-200 bg-slate-50 p-3.5">
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="outline" className={`font-semibold ${SEVERITY_STYLES[finding.severity].badge}`}>
-                      {SEVERITY_LABELS[finding.severity]}
-                    </Badge>
-                    {finding.file && (
-                      <span className="font-mono text-xs text-slate-500">
-                        {finding.file}
-                        {finding.line ? `:${finding.line}` : ""}
-                      </span>
-                    )}
+                    <Badge variant="outline" className={SEVERITY_STYLES[finding.severity].badge}>{SEVERITY_LABELS[finding.severity]}</Badge>
+                    {finding.file && <span className="wrap-anywhere font-mono text-xs text-slate-600">{finding.file}{finding.line ? ":" + finding.line : ""}</span>}
                   </div>
-                  <p className="mt-2 text-sm font-semibold text-slate-900">{finding.title}</p>
-                  <p className="mt-0.5 text-sm text-slate-600">{finding.detail}</p>
-                  {finding.suggestion && <p className="mt-1.5 text-sm text-blue-700">{finding.suggestion}</p>}
+                  <p className="mt-2 wrap-anywhere text-sm font-semibold text-slate-900">{finding.title}</p>
+                  <p className="mt-0.5 wrap-anywhere text-sm text-slate-600">{finding.detail}</p>
+                  {finding.suggestion && <p className="mt-1.5 wrap-anywhere text-sm text-blue-700">{finding.suggestion}</p>}
                 </div>
               ))
             )}
@@ -466,13 +412,7 @@ function ToolkitContent() {
 
 export default function ToolkitPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="flex min-h-[400px] items-center justify-center">
-          <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
-        </div>
-      }
-    >
+    <Suspense fallback={<div className="flex min-h-60 items-center justify-center" role="status"><Loader2 className="size-6 animate-spin text-blue-600" /><span className="sr-only">Loading toolkit</span></div>}>
       <ToolkitContent />
     </Suspense>
   );

@@ -118,7 +118,7 @@ export async function getToolkitPullRequests(
     if (!access) return fail(new Error("Repository not found"));
 
     const token = await requireRepositoryToken(access.repository.userId, access.repository.owner);
-    const pulls = await getOpenPullRequests(token, access.repository.owner, access.repository.name, "all");
+    const pulls = await getOpenPullRequests(token, access.repository.owner, access.repository.name, "all", { propagateErrors: true });
 
     return ok(
       pulls.map((pr) => ({

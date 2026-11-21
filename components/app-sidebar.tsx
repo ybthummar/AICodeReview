@@ -1,9 +1,30 @@
 "use client";
 
-import { usePathname } from "next/navigation";
-import { useSession } from "@/lib/auth-client";
-import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import {
+  BarChart3,
+  Bot,
+  ChevronsUpDown,
+  ClipboardList,
+  CreditCard,
+  Crown,
+  Github,
+  LayoutDashboard,
+  LogOut,
+  MessageSquareText,
+  Rat,
+  Settings,
+  ShieldCheck,
+  Users,
+  UsersRound,
+  Wrench,
+  X,
+} from "lucide-react";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,285 +32,187 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Github,
-  CreditCard,
-  Settings,
-  LogOut,
-  LayoutDashboard,
-  Users,
-  ChevronDown,
-  MessageSquareText,
-  Crown,
-  Rat,
-  ChevronLeft,
-  Bot,
-  Wrench,
-  UsersRound,
-  BarChart3,
-  ClipboardList,
-} from "lucide-react";
-import Link from "next/link";
-import LogoutButton from "@/module/auth/components/logout";
-import { useEffect } from "react";
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarTrigger,
+  useSidebar,
+} from "@/components/ui/sidebar";
+import { signOut } from "@/lib/auth-client";
 import { getSubscriptionStatus } from "@/module/dashboard/actions";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { Separator } from "@/components/ui/separator";
-import { ShieldCheck } from "lucide-react";
-import { isAdminUser } from "@/lib/admin";
 
-const baseNavigationItems = [
-  { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { title: "Repositories", href: "/dashboard/repositories", icon: Github },
-  { title: "Reviews", href: "/dashboard/reviews", icon: MessageSquareText },
-  { title: "Analytics", href: "/dashboard/analytics", icon: BarChart3 },
-  { title: "Ask Codebase", href: "/dashboard/chat", icon: Bot },
-  { title: "AI Toolkit", href: "/dashboard/toolkit", icon: Wrench },
-  { title: "Team", href: "/dashboard/team", icon: UsersRound },
-  { title: "Audit & Reports", href: "/dashboard/audit", icon: ClipboardList },
+const navigationGroups = [
   {
-    title: "Subscriptions",
-    href: "/dashboard/subscriptions",
-    icon: CreditCard,
+    label: "Workspace",
+    items: [
+      { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+      { title: "Repositories", href: "/dashboard/repositories", icon: Github },
+      { title: "Reviews", href: "/dashboard/reviews", icon: MessageSquareText },
+      { title: "Analytics", href: "/dashboard/analytics", icon: BarChart3 },
+      { title: "Ask Codebase", href: "/dashboard/chat", icon: Bot },
+      { title: "AI Toolkit", href: "/dashboard/toolkit", icon: Wrench },
+    ],
   },
-  { title: "Clients", href: "/dashboard/clients", icon: Users },
-  { title: "Settings", href: "/dashboard/settings", icon: Settings },
+  {
+    label: "Manage",
+    items: [
+      { title: "Team", href: "/dashboard/team", icon: UsersRound },
+      { title: "Audit & Reports", href: "/dashboard/audit", icon: ClipboardList },
+      { title: "Subscriptions", href: "/dashboard/subscriptions", icon: CreditCard },
+      { title: "Clients", href: "/dashboard/clients", icon: Users },
+      { title: "Settings", href: "/dashboard/settings", icon: Settings },
+    ],
+  },
 ];
 
-function AppSidebar() {
+const adminItem = { title: "Admin Panel", href: "/dashboard/admin", icon: ShieldCheck };
+
+function isActivePath(pathname: string, href: string) {
+  return pathname === href || (href !== "/dashboard" && pathname.startsWith(href + "/"));
+}
+
+export function DashboardHeader() {
   const pathname = usePathname();
-  const { data: session } = useSession();
-  const [proUser, setProUser] = useState(false);
-  const [isCollapsed, setIsCollapsed] = useState(false);
-
-  useEffect(() => {
-    const loadSubscription = async () => {
-      try {
-        const { isPro } = await getSubscriptionStatus();
-        setProUser(isPro);
-      } catch (error) {
-        console.error("Failed to load subscription status:", error);
-      }
-    };
-
-    loadSubscription();
-  }, []);
-
-  const isActive = (url: string) => {
-    return (
-      pathname === url || (pathname?.startsWith(url) && url !== "/dashboard")
-    );
-  };
-
-  if (!session) {
-    return null;
-  }
-
-  const user = session.user;
-  const isAdmin = isAdminUser(user);
-  const navigationList = [
-    ...baseNavigationItems,
-    ...(isAdmin
-      ? [
-          {
-            title: "Admin Panel",
-            href: "/dashboard/admin",
-            icon: ShieldCheck,
-          },
-        ]
-      : []),
-  ];
-
-  const userData = {
-    name: user?.name || "User",
-    email: user?.email || "",
-    avatar: user?.image || "",
-    userIntials:
-      user?.name
-        ?.split(" ")
-        .map((n) => n[0])
-        .join("")
-        .toUpperCase() || "U",
-  };
+  const { isMobile, open, openMobile } = useSidebar();
+  const page = [...navigationGroups.flatMap((group) => group.items), adminItem]
+    .find((item) => isActivePath(pathname, item.href));
 
   return (
-    <TooltipProvider delayDuration={0}>
-      <aside
-        className={`${
-          isCollapsed ? "w-20" : "w-64"
-        } sticky top-0 h-screen shrink-0 z-30 bg-white shadow-md flex flex-col border-r transition-all duration-300`}
-      >
-        {/* Header with Logo */}
-        <div className={`px-6 pt-6 pb-5 ${isCollapsed && "px-3"}`}>
-          <Link
-            href="/"
-            className="flex justify-center space-x-2 text-3xl font-semibold"
-          >
-            <div
-              className={`flex items-center ${
-                isCollapsed ? "justify-center" : "justify-center gap-x-3"
-              }`}
-            >
-              <Rat className="h-14 w-14 text-blue-600" />
-              {!isCollapsed && (
-                <h1 className="text-3xl font-bold text-gray-900 tracking-tight mt-2">
-                  RepoPilot
-                </h1>
-              )}
-            </div>
-          </Link>
-        </div>
-        {/* Toggle Button */}
-        <button
-          onClick={() => setIsCollapsed(!isCollapsed)}
-          className="absolute -right-3 top-24 p-1.5 rounded-full bg-white shadow-md border text-gray-500 hover:text-gray-700 focus:outline-none cursor-pointer z-10"
-        >
-          <ChevronLeft
-            className={`h-4 w-4 transition-transform duration-300 ${
-              isCollapsed ? "rotate-180" : ""
-            }`}
-          />
-        </button>
-
-        <Separator className="my-2" />
-
-        {/* Navigation Menu */}
-        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-          {navigationList.map((item) => {
-            const active = isActive(item.href);
-            const menuItem = (
-              <div
-                key={item.href}
-                className={`
-                  group flex items-center ${
-                    isCollapsed ? "justify-center px-2" : "px-4"
-                  } py-2.5 rounded-lg transition-all duration-200 text-sm font-medium cursor-pointer
-                  ${
-                    active
-                      ? "bg-[#2563EB] text-white shadow-md hover:bg-[#012bff]"
-                      : "text-gray-700 group hover:bg-[#e8e8e8]"
-                  }
-                `}
-              >
-                <item.icon
-                  className={`w-5 h-5 ${!isCollapsed && "mr-3"} ${
-                    active
-                      ? "text-white"
-                      : "text-gray-500 group-hover:text-black"
-                  }`}
-                />
-                {!isCollapsed && <span className="truncate">{item.title}</span>}
-              </div>
-            );
-
-            // Wrap with Tooltip when collapsed
-            if (isCollapsed) {
-              return (
-                <Tooltip key={item.href}>
-                  <TooltipTrigger asChild>
-                    <Link href={item.href}>{menuItem}</Link>
-                  </TooltipTrigger>
-                  <TooltipContent side="right" className="font-medium">
-                    <p>{item.title}</p>
-                  </TooltipContent>
-                </Tooltip>
-              );
-            }
-
-            return (
-              <Link key={item.href} href={item.href}>
-                {menuItem}
-              </Link>
-            );
-          })}
-        </nav>
-        {/* Footer */}
-        <div className={`p-5 ${isCollapsed && "p-3"}`}>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              {isCollapsed ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      className="w-full flex items-center justify-center rounded-xl text-left
-                      text-black transition-colors duration-200 cursor-pointer hover:bg-[#e8e8e8] hover:text-black p-2"
-                    >
-                      <Avatar className="h-9 w-9 border-black">
-                        <AvatarImage
-                          src={userData.avatar}
-                          alt={userData.name}
-                        />
-                        <AvatarFallback className="text-sm font-semibold">
-                          {userData.userIntials}
-                        </AvatarFallback>
-                      </Avatar>
-                    </button>
-                  </TooltipTrigger>
-                </Tooltip>
-              ) : (
-                <button
-                  className="w-full flex items-center justify-between rounded-xl text-left px-3 py-2
-                  text-black transition-colors duration-200 cursor-pointer hover:bg-[#e8e8e8] hover:text-black"
-                >
-                  <div className="flex items-center space-x-3 truncate">
-                    <Avatar className="h-9 w-9 border-black">
-                      <AvatarImage src={userData.avatar} alt={userData.name} />
-                      <AvatarFallback className="text-sm font-semibold">
-                        {userData.userIntials}
-                      </AvatarFallback>
-                    </Avatar>
-
-                    <div className="truncate">
-                      <div className="flex items-center">
-                        <p className="text-sm font-semibold truncate">
-                          {userData.name}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                  <ChevronDown className="w-4 h-4 text-gray-400 ml-2" />
-                </button>
-              )}
-            </DropdownMenuTrigger>
-
-            <DropdownMenuContent
-              className="w-64 bg-white shadow-2xl rounded-lg p-1 border border-gray-100"
-              align={isCollapsed ? "start" : "end"}
-              side={isCollapsed ? "right" : "bottom"}
-            >
-              <div className="px-3 py-2 text-sm text-gray-700 font-medium border-b border-gray-100 mb-1">
-                <div className="flex gap-x-2 justify-between">
-                  <p className="truncate">{userData.name}</p>
-                  <div>{proUser && <Crown className="text-yellow-600" />}</div>
-                </div>
-                <p className="text-xs text-gray-500 font-normal truncate">
-                  {userData.email}
-                </p>
-              </div>
-
-              <Link href="/dashboard/settings" passHref>
-                <DropdownMenuItem className="cursor-pointer text-gray-700 hover:bg-blue-50 p-2 rounded-md">
-                  <Settings className="h-4 w-4 mr-2" />
-                  <span>Account Settings</span>
-                </DropdownMenuItem>
-              </Link>
-
-              <LogoutButton>
-                <DropdownMenuItem className="cursor-pointer text-red-600 hover:bg-red-50 p-2 rounded-md">
-                  <LogOut className="h-4 w-4 mr-2" />
-                  <span>Log out</span>
-                </DropdownMenuItem>
-              </LogoutButton>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </aside>
-    </TooltipProvider>
+    <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b border-slate-200 bg-white/95 px-3 backdrop-blur sm:px-5">
+      <SidebarTrigger
+        aria-label="Toggle navigation"
+        aria-expanded={isMobile ? openMobile : open}
+        className="size-10 rounded-lg text-slate-600"
+      />
+      <span className="h-5 w-px bg-slate-200" aria-hidden="true" />
+      <span className="truncate text-sm font-semibold text-slate-800">{page?.title ?? "Dashboard"}</span>
+    </header>
   );
 }
 
-export default AppSidebar;
+export default function AppSidebar({
+  user,
+  isAdmin,
+}: {
+  user: { name: string; email: string; image?: string | null };
+  isAdmin: boolean;
+}) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const { isMobile, setOpenMobile } = useSidebar();
+  const { data: subscription } = useQuery({
+    queryKey: ["sidebar-subscription"],
+    queryFn: () => getSubscriptionStatus(),
+    staleTime: 60_000,
+  });
+
+  const initials = user.name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "U";
+
+  async function logout() {
+    try {
+      const result = await signOut();
+      if (result.error) throw new Error(result.error.message);
+      setOpenMobile(false);
+      router.replace("/login");
+      router.refresh();
+    } catch {
+      toast.error("Could not sign out. Please try again.");
+    }
+  }
+
+  return (
+    <Sidebar collapsible="icon" className="border-slate-200">
+      <SidebarHeader className="h-16 shrink-0 flex-row items-center justify-between border-b border-slate-200 px-3 group-data-[collapsible=icon]:px-2">
+        <Link
+          href="/dashboard"
+          onClick={() => setOpenMobile(false)}
+          aria-label="RepoPilot dashboard"
+          className="flex min-w-0 items-center gap-2.5 rounded-lg focus-visible:outline-2 focus-visible:outline-blue-600"
+        >
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white">
+            <Rat className="size-5" aria-hidden="true" />
+          </span>
+          <span className="truncate text-lg font-bold tracking-tight text-slate-900 group-data-[collapsible=icon]:hidden">RepoPilot</span>
+        </Link>
+        {isMobile && (
+          <Button variant="ghost" size="icon" onClick={() => setOpenMobile(false)} aria-label="Close navigation">
+            <X className="size-5" />
+          </Button>
+        )}
+      </SidebarHeader>
+
+      <SidebarContent className="gap-1 py-2 group-data-[collapsible=icon]:overflow-y-auto">
+        <nav aria-label="Dashboard navigation">
+          {navigationGroups.map((group) => (
+            <SidebarGroup key={group.label} className="px-2.5 group-data-[collapsible=icon]:px-2">
+              <SidebarGroupLabel className="text-xs font-semibold text-slate-500">{group.label}</SidebarGroupLabel>
+              <SidebarMenu>
+                {(isAdmin && group.label === "Manage" ? [...group.items, adminItem] : group.items).map((item) => {
+                  const active = isActivePath(pathname, item.href);
+                  return (
+                    <SidebarMenuItem key={item.href}>
+                      <SidebarMenuButton
+                        asChild
+                        tooltip={item.title}
+                        isActive={active}
+                        className="h-10 gap-3 rounded-lg px-2.5 text-slate-600 data-[active=true]:bg-blue-100/80 data-[active=true]:font-semibold data-[active=true]:text-blue-800"
+                      >
+                        <Link
+                          href={item.href}
+                          onClick={() => setOpenMobile(false)}
+                          aria-label={item.title}
+                          aria-current={active ? "page" : undefined}
+                        >
+                          <item.icon aria-hidden="true" />
+                          <span>{item.title}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
+              </SidebarMenu>
+            </SidebarGroup>
+          ))}
+        </nav>
+      </SidebarContent>
+
+      <SidebarFooter className="shrink-0 border-t border-slate-200 p-2">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <SidebarMenuButton size="lg" aria-label="Account menu" className="gap-2.5 rounded-lg">
+              <Avatar className="size-8 shrink-0">
+                <AvatarImage src={user.image ?? undefined} alt="" />
+                <AvatarFallback className="bg-blue-100 text-xs font-semibold text-blue-800">{initials}</AvatarFallback>
+              </Avatar>
+              <div className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
+                <p className="truncate text-sm font-semibold text-slate-900">{user.name || "Account"}</p>
+                <p className="truncate text-xs text-slate-500">{user.email}</p>
+              </div>
+              <ChevronsUpDown className="text-slate-400 group-data-[collapsible=icon]:hidden" aria-hidden="true" />
+            </SidebarMenuButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent side={isMobile ? "top" : "right"} align="end" sideOffset={8} className="w-60">
+            <div className="flex min-w-0 items-center justify-between gap-2 border-b px-2.5 py-2 text-sm font-semibold">
+              <span className="truncate">{user.name || "Account"}</span>
+              {subscription?.isPro && <Crown className="size-4 shrink-0 text-amber-600" aria-label="Pro" />}
+            </div>
+            <DropdownMenuItem asChild>
+              <Link href="/dashboard/settings" onClick={() => setOpenMobile(false)}>
+                <Settings aria-hidden="true" /> Account settings
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void logout()} variant="destructive">
+              <LogOut aria-hidden="true" /> Sign out
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </SidebarFooter>
+    </Sidebar>
+  );
+}

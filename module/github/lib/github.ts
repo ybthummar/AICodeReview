@@ -693,7 +693,8 @@ export async function getOpenPullRequests(
   token: string,
   owner: string,
   repo: string,
-  state: "open" | "closed" | "all" = "all"
+  state: "open" | "closed" | "all" = "all",
+  options: { propagateErrors?: boolean } = {}
 ): Promise<GitHubPullRequest[]> {
   try {
     const octokit = new Octokit({ auth: token });
@@ -727,6 +728,7 @@ export async function getOpenPullRequests(
       },
     }));
   } catch (error) {
+    if (options.propagateErrors) throw new Error("Could not load pull requests from GitHub.");
     console.error(`Failed to list pull requests for ${owner}/${repo}:`, error);
     return [];
   }

@@ -106,7 +106,7 @@ export default function ContributionGraph() {
           </CardDescription>
         </div>
 
-        <div className="flex items-center gap-2 self-start sm:self-auto">
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
           {selectedDayInfo && (
             <div className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 flex items-center gap-1.5 font-medium animate-in fade-in duration-200">
               <Calendar className="w-3.5 h-3.5" />
@@ -132,6 +132,7 @@ export default function ContributionGraph() {
             onClick={() => refetch()}
             disabled={isRefetching}
             className="h-8 w-8 text-slate-500 hover:text-slate-900"
+            aria-label="Refresh activity"
             title="Refresh activity"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRefetching ? "animate-spin" : ""}`} />

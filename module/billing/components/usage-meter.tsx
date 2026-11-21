@@ -5,8 +5,10 @@ import { useQuery } from "@tanstack/react-query";
 import { Infinity as InfinityIcon, Zap } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { getUsageSummary } from "@/module/billing/actions";
+import type { UsageKind } from "@/module/billing/lib/usage";
 
 export const USAGE_QUERY_KEY = ["usage-summary"];
+const compactLabels = { reviews: "reviews", chats: "questions", toolkit: "Toolkit runs" };
 
 function barColor(ratio: number) {
   if (ratio >= 1) return "bg-rose-500";
@@ -14,7 +16,7 @@ function barColor(ratio: number) {
   return "bg-blue-500";
 }
 
-export default function UsageMeter({ compact = false }: { compact?: boolean }) {
+export default function UsageMeter({ compact = false, kind = "reviews" }: { compact?: boolean; kind?: UsageKind }) {
   const { data } = useQuery({
     queryKey: USAGE_QUERY_KEY,
     queryFn: async () => await getUsageSummary(),
@@ -30,18 +32,19 @@ export default function UsageMeter({ compact = false }: { compact?: boolean }) {
   });
 
   if (compact) {
-    const reviews = data.items.find((i) => i.kind === "reviews");
-    if (!reviews) return null;
+    const item = data.items.find((entry) => entry.kind === kind);
+    if (!item) return null;
+    const label = compactLabels[kind];
 
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600">
         <Zap className="h-3.5 w-3.5 text-blue-600" />
-        {reviews.limit === null ? (
+        {item.limit === null ? (
           <>
-            {reviews.used} reviews this month <InfinityIcon className="h-3 w-3" />
+            {item.used} {label} this month <InfinityIcon className="h-3 w-3" aria-label="Unlimited" />
           </>
         ) : (
-          `${reviews.used}/${reviews.limit} reviews this month`
+          `${item.used}/${item.limit} ${label} this month`
         )}
       </span>
     );

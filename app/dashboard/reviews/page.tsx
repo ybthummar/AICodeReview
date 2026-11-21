@@ -741,19 +741,21 @@ export default function ReviewPage() {
       </div>
 
       {/* Tabs & Filters Bar */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 pb-4 border-b border-slate-200">
-        <div className="flex items-center gap-3 flex-wrap">
+      <div className="mb-6 flex min-w-0 flex-col justify-between gap-4 border-b border-slate-200 pb-4 2xl:flex-row 2xl:items-center">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
         {/* Navigation Pills */}
-        <div className="flex items-center gap-2 p-1 bg-slate-200/70 rounded-xl w-fit">
+        <div role="group" aria-label="Review view" className="grid w-full grid-cols-2 gap-1 rounded-xl bg-slate-200/70 p-1 sm:w-fit">
           <button
             onClick={() => setActiveTab("prs")}
-            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all flex items-center gap-2 ${
+            type="button"
+            aria-pressed={activeTab === "prs"}
+            className={`flex min-w-0 cursor-pointer items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-center text-sm font-semibold leading-tight focus-visible:outline-2 focus-visible:outline-blue-600 sm:px-4 ${
               activeTab === "prs"
                 ? "bg-white text-blue-600 shadow-sm"
                 : "text-slate-600 hover:text-slate-900"
             }`}
           >
-            <GitPullRequest className="w-4 h-4" />
+            <GitPullRequest className="size-4 shrink-0" />
             Pull Requests
             <Badge
               variant="secondary"
@@ -772,13 +774,15 @@ export default function ReviewPage() {
 
           <button
             onClick={() => setActiveTab("reports")}
-            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all flex items-center gap-2 ${
+            type="button"
+            aria-pressed={activeTab === "reports"}
+            className={`flex min-w-0 cursor-pointer items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-center text-sm font-semibold leading-tight focus-visible:outline-2 focus-visible:outline-blue-600 sm:px-4 ${
               activeTab === "reports"
                 ? "bg-white text-blue-600 shadow-sm"
                 : "text-slate-600 hover:text-slate-900"
             }`}
           >
-            <Sparkles className="w-4 h-4" />
+            <Sparkles className="size-4 shrink-0" />
             Review Reports
             <Badge
               variant="secondary"
@@ -821,14 +825,15 @@ export default function ReviewPage() {
         </div>
 
         {/* Search & Repository Filter */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+        <div className="flex min-w-0 flex-col items-stretch gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
           {uniqueRepos.length > 0 && (
-            <div className="flex items-center gap-1.5">
+            <div className="flex min-w-0 items-center gap-1.5 sm:max-w-64">
               <Filter className="w-4 h-4 text-slate-400 shrink-0" />
               <select
+                aria-label="Filter by repository"
                 value={selectedRepoFilter}
                 onChange={(e) => setSelectedRepoFilter(e.target.value)}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 shadow-sm"
+                className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-xs focus-visible:outline-2 focus-visible:outline-blue-600"
               >
                 <option value="all">All Repositories ({uniqueRepos.length})</option>
                 {uniqueRepos.map((r) => (
@@ -842,9 +847,10 @@ export default function ReviewPage() {
 
           {activeTab === "reports" && (
             <select
+              aria-label="Filter by verdict"
               value={verdictFilter}
               onChange={(e) => setVerdictFilter(e.target.value as ReviewVerdict | "all")}
-              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 shadow-sm"
+              className="h-9 min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-xs focus-visible:outline-2 focus-visible:outline-blue-600"
             >
               <option value="all">All verdicts</option>
               {VERDICTS.map((v) => (
@@ -855,9 +861,10 @@ export default function ReviewPage() {
             </select>
           )}
 
-          <div className="relative min-w-[220px]">
+          <div className="relative w-full min-w-0 sm:w-56">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <Input
+              aria-label={activeTab === "prs" ? "Search pull requests" : "Search review reports"}
               placeholder={activeTab === "prs" ? "Filter PRs by title, author..." : "Filter reviews..."}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -876,7 +883,7 @@ export default function ReviewPage() {
               <p className="text-sm font-medium">Fetching pull requests from connected GitHub repositories...</p>
             </div>
           ) : filteredPRs.length === 0 ? (
-            <Card className="p-12 text-center border-dashed border-2 border-slate-200 bg-white/70">
+            <Card className="border-2 border-dashed border-slate-200 bg-white/70 p-5 text-center sm:p-12">
               <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-blue-600">
                 <GitPullRequest className="w-8 h-8" />
               </div>
@@ -888,7 +895,7 @@ export default function ReviewPage() {
               <p className="text-xs text-slate-500 max-w-md mx-auto mb-5 leading-relaxed">
                 Connect your repositories or create a pull request on GitHub. You can also run an AI review manually by entering a PR number.
               </p>
-              <div className="flex justify-center gap-3">
+              <div className="flex flex-wrap justify-center gap-3">
                 <Button
                   variant="outline"
                   size="sm"
