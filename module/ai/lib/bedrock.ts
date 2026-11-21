@@ -40,7 +40,12 @@ async function invokeBedrock(modelId: string, operation: "converse" | "invoke", 
 
   if (!response.ok) {
     const details = await response.text();
-    throw new Error(`Bedrock ${operation} request failed (${response.status}): ${details}`);
+    const permissionHint = details.includes("Operation not allowed")
+      ? ` Check that the bearer key was generated in ${config.region} and its IAM principal can invoke the configured model or inference profile.`
+      : "";
+    throw new Error(
+      `Bedrock ${operation} request failed (${response.status}): ${details}${permissionHint}`
+    );
   }
 
   return response.json() as Promise<unknown>;

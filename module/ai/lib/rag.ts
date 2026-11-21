@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { pineconeIndex } from "@/lib/pinecone";
+import {
+  deletePineconeDocuments,
+  fetchPineconeDocuments,
+  listPineconeDocuments,
+  searchPineconeDocuments,
+  upsertPineconeDocuments,
+} from "@/lib/pinecone-documents";
 import { embed, embedMany } from "ai";
 import { google } from "@ai-sdk/google";
 import {
@@ -8,21 +14,37 @@ import {
 } from "@/module/ai/lib/bedrock";
 import { parseWithASTService } from "@/module/ast/client";
 import { SYMBOL_PARSER_EXTENSIONS, isIndexablePath } from "@/module/ai/lib/indexable";
-import type { PineconeRecord } from "@pinecone-database/pinecone";
 import type { CodeMetadata } from "@/types/ast/type";
 
 const EMBEDDING_MODEL_ID = "gemini-embedding-001";
+const EMBEDDING_DIMENSIONS = 1024;
 const EMBED_BATCH_SIZE = 50;
-const UPSERT_BATCH_SIZE = 100;
+const UPSERT_BATCH_SIZE = 96;
 const PARSE_CONCURRENCY = 5;
 const MAX_ID_LENGTH = 500;
 const MAX_FILE_CHARS = 8000;
 const FILE_CHUNK_OVERLAP = 500;
 const MAX_SYMBOL_CHARS = 2000;
 
+function shouldUseBedrockEmbeddings(): boolean {
+  const provider = process.env.AI_EMBEDDING_PROVIDER?.trim().toLowerCase();
+
+  if (provider === "bedrock") {
+    if (!isBedrockEmbeddingConfigured()) {
+      throw new Error("AI_EMBEDDING_PROVIDER is bedrock, but Bedrock credentials are not configured.");
+    }
+    return true;
+  }
+  if (provider && provider !== "google") {
+    throw new Error('AI_EMBEDDING_PROVIDER must be either "bedrock" or "google".');
+  }
+
+  return false;
+}
+
 export async function generateEmbedding(text: string): Promise<number[]> {
   try {
-    if (isBedrockEmbeddingConfigured()) {
+    if (shouldUseBedrockEmbeddings()) {
       const [embedding] = await generateBedrockEmbeddings([text]);
       return embedding;
     }
@@ -30,6 +52,9 @@ export async function generateEmbedding(text: string): Promise<number[]> {
     const { embedding } = await embed({
       model: google.textEmbeddingModel(EMBEDDING_MODEL_ID),
       value: text,
+      providerOptions: {
+        google: { outputDimensionality: EMBEDDING_DIMENSIONS },
+      },
     });
 
     return embedding;
@@ -111,14 +136,10 @@ async function listIdsWithPrefix(prefix: string): Promise<string[]> {
       seenTokens.add(paginationToken);
     }
 
-    const page = await pineconeIndex.listPaginated({
-      prefix,
-      limit: 100,
-      ...(paginationToken ? { paginationToken } : {}),
-    });
+    const page = await listPineconeDocuments(prefix, paginationToken);
 
-    for (const vector of page.vectors ?? []) {
-      if (vector.id) ids.push(vector.id);
+    for (const document of page.documents) {
+      if (document._id) ids.push(document._id);
     }
     paginationToken = page.pagination?.next;
     if (!paginationToken) break;
@@ -129,7 +150,7 @@ async function listIdsWithPrefix(prefix: string): Promise<string[]> {
 
 async function deleteIds(ids: string[]) {
   for (let i = 0; i < ids.length; i += 500) {
-    await pineconeIndex.deleteMany(ids.slice(i, i + 500));
+    await deletePineconeDocuments(ids.slice(i, i + 500));
   }
 }
 
@@ -148,9 +169,9 @@ export async function purgeRepositoryVectors(
 
   for (let i = 0; i < legacy.length; i += 100) {
     const batch = legacy.slice(i, i + 100);
-    const fetched = await pineconeIndex.fetch(batch);
+    const fetched = await fetchPineconeDocuments(batch);
     for (const id of batch) {
-      if (fetched.records?.[id]?.metadata?.repoId === repoId) owned.push(id);
+      if (fetched.documents[id]?.repoId === repoId) owned.push(id);
     }
   }
 
@@ -212,18 +233,21 @@ export async function indexCodebase(
 
   await Promise.all(Array.from({ length: PARSE_CONCURRENCY }, worker));
 
-  const vectors: PineconeRecord<CodeMetadata>[] = [];
+  const vectors: { id: string; values: number[]; metadata: CodeMetadata }[] = [];
 
   for (let i = 0; i < pending.length; i += EMBED_BATCH_SIZE) {
     const batch = pending.slice(i, i + EMBED_BATCH_SIZE);
 
     try {
-      const embeddings = isBedrockEmbeddingConfigured()
+      const embeddings = shouldUseBedrockEmbeddings()
         ? await generateBedrockEmbeddings(batch.map((item) => item.text))
         : (
             await embedMany({
               model: google.textEmbeddingModel(EMBEDDING_MODEL_ID),
               values: batch.map((item) => item.text),
+              providerOptions: {
+                google: { outputDimensionality: EMBEDDING_DIMENSIONS },
+              },
             })
           ).embeddings;
 
@@ -255,7 +279,7 @@ export async function indexCodebase(
   for (let i = 0; i < vectors.length; i += UPSERT_BATCH_SIZE) {
     const batch = vectors.slice(i, i + UPSERT_BATCH_SIZE);
     try {
-      await pineconeIndex.upsert(batch);
+      await upsertPineconeDocuments(batch);
       console.log(`Upserted batch of ${batch.length} vectors to Pinecone for ${repoId}`);
     } catch (error) {
       console.error(`Failed to upsert batch to Pinecone:`, error);
@@ -276,12 +300,24 @@ export async function retrieveContext(
 ) {
   const embedding = await generateEmbedding(query);
 
-  const results = await pineconeIndex.query({
-    vector: embedding,
-    filter: { repoId },
-    topK,
-    includeMetadata: true,
-  });
+  const results = await searchPineconeDocuments(embedding, repoId, topK);
 
-  return (results.matches ?? []).map((match) => match.metadata).filter(Boolean);
+  return results.matches
+    .map(stripSearchFields)
+    .filter(isCodeMetadata);
+}
+
+function stripSearchFields(match: Record<string, unknown>): Record<string, unknown> {
+  const metadata = { ...match };
+  delete metadata._id;
+  delete metadata._score;
+  return metadata;
+}
+
+function isCodeMetadata(value: Record<string, unknown>): value is CodeMetadata {
+  return (
+    typeof value.repoId === "string" &&
+    typeof value.path === "string" &&
+    (value.type === "file" || value.type === "symbol")
+  );
 }
