@@ -1,11 +1,13 @@
 import { pinecone } from "@/lib/pinecone";
+import type { PineconeRecord } from "@pinecone-database/pinecone";
 
 const API_VERSION = "2026-07";
-const DEFAULT_NAMESPACE = "__default__";
-const EMBEDDING_FIELD = process.env.PINECONE_EMBEDDING_FIELD || "embedding";
-const indexName = (process.env.PINECONE_INDEX || "repopilot-v2").toLowerCase();
+const DEFAULT_DOCUMENT_NAMESPACE = "__default__";
 
 type JsonRecord = Record<string, unknown>;
+type PineconeMetadataValue = string | number | boolean | string[];
+type PineconeMetadata = Record<string, PineconeMetadataValue>;
+type PineconeMode = "documents" | "vectors";
 
 interface DocumentPage {
   documents: { _id: string }[];
@@ -20,46 +22,138 @@ interface SearchResponse {
   matches: (JsonRecord & { _id: string })[];
 }
 
-let indexHostPromise: Promise<string> | undefined;
+interface IndexDetails {
+  name: string;
+  host: string;
+  dimension?: number;
+}
+
+let indexDetailsPromise: Promise<IndexDetails> | undefined;
+let indexModePromise: Promise<PineconeMode> | undefined;
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-async function getIndexHost(): Promise<string> {
-  if (!indexHostPromise) {
-    indexHostPromise = pinecone.describeIndex(indexName).then((index) => {
+function toPineconeMetadata(metadata: object): PineconeMetadata {
+  const result: PineconeMetadata = {};
+
+  for (const [key, value] of Object.entries(metadata)) {
+    if (value === undefined) continue;
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
+      result[key] = value;
+      continue;
+    }
+    if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+      result[key] = value;
+      continue;
+    }
+    throw new Error(`Unsupported Pinecone metadata value for field "${key}"`);
+  }
+
+  return result;
+}
+
+function getIndexName(): string {
+  const indexName = process.env.PINECONE_INDEX?.trim().toLowerCase();
+  if (!indexName) {
+    throw new Error("PINECONE_INDEX must name the Pinecone index to use.");
+  }
+  return indexName;
+}
+
+async function getIndexDetails(): Promise<IndexDetails> {
+  if (!indexDetailsPromise) {
+    indexDetailsPromise = pinecone.describeIndex(getIndexName()).then((index) => {
       if (!index.host) {
-        throw new Error(`Pinecone index "${indexName}" has no data-plane host`);
+        throw new Error(`Pinecone index "${index.name}" has no data-plane host`);
       }
-      return `https://${index.host}`;
+      return { name: index.name, host: `https://${index.host}`, dimension: index.dimension };
     });
   }
 
   try {
-    return await indexHostPromise;
+    return await indexDetailsPromise;
   } catch (error) {
-    indexHostPromise = undefined;
+    indexDetailsPromise = undefined;
     throw error;
   }
 }
 
-async function requestDocumentsApi(path: string, body: JsonRecord): Promise<unknown> {
+function getApiKey(): string {
   const apiKey = process.env.PINECOIN_DB_API_KEY || process.env.PINECONE_API_KEY;
   if (!apiKey) {
     throw new Error("Pinecone API key is not configured");
   }
+  return apiKey;
+}
 
-  const host = await getIndexHost();
-  const response = await fetch(`${host}/namespaces/${DEFAULT_NAMESPACE}/documents/${path}`, {
-    method: "POST",
-    headers: {
-      "Api-Key": apiKey,
-      "Content-Type": "application/json",
-      "X-Pinecone-Api-Version": API_VERSION,
-    },
-    body: JSON.stringify(body),
-  });
+async function getIndexMode(): Promise<PineconeMode> {
+  if (!indexModePromise) {
+    indexModePromise = (async () => {
+      const { host } = await getIndexDetails();
+      const response = await fetch(
+        `${host}/namespaces/${DEFAULT_DOCUMENT_NAMESPACE}/documents/list`,
+        {
+          method: "POST",
+          headers: {
+            "Api-Key": getApiKey(),
+            "Content-Type": "application/json",
+            "X-Pinecone-Api-Version": API_VERSION,
+          },
+          body: JSON.stringify({ limit: 1 }),
+        }
+      );
+
+      if (response.ok) return "documents";
+
+      const detail = await response.text();
+      if (response.status === 400 && detail.includes("not served by the documents API")) {
+        return "vectors";
+      }
+
+      throw new Error(
+        `Could not determine Pinecone data API mode (${response.status}): ${detail.slice(0, 1000)}`
+      );
+    })();
+  }
+
+  try {
+    return await indexModePromise;
+  } catch (error) {
+    indexModePromise = undefined;
+    throw error;
+  }
+}
+
+function getVectorIndex(namespace: string) {
+  return pinecone.index(getIndexName()).namespace(namespace);
+}
+
+function getNamespace(mode: PineconeMode): string {
+  const configured = process.env.PINECONE_NAMESPACE?.trim();
+  if (configured) return configured;
+  return mode === "documents" ? DEFAULT_DOCUMENT_NAMESPACE : "";
+}
+
+async function requestDocumentsApi(path: string, body: JsonRecord): Promise<unknown> {
+  const { host } = await getIndexDetails();
+  const response = await fetch(
+    `${host}/namespaces/${encodeURIComponent(getNamespace("documents"))}/documents/${path}`,
+    {
+      method: "POST",
+      headers: {
+        "Api-Key": getApiKey(),
+        "Content-Type": "application/json",
+        "X-Pinecone-Api-Version": API_VERSION,
+      },
+      body: JSON.stringify(body),
+    }
+  );
 
   if (!response.ok) {
     const detail = (await response.text()).slice(0, 1000);
@@ -71,58 +165,94 @@ async function requestDocumentsApi(path: string, body: JsonRecord): Promise<unkn
   return response.json();
 }
 
+export async function getPineconeIndexDimension(): Promise<number> {
+  const { dimension } = await getIndexDetails();
+  if (!dimension || !Number.isInteger(dimension)) {
+    throw new Error(`Pinecone index "${getIndexName()}" does not expose a valid dense dimension.`);
+  }
+  return dimension;
+}
+
 export async function listPineconeDocuments(
   prefix: string,
   paginationToken?: string
 ): Promise<DocumentPage> {
-  const response = await requestDocumentsApi("list", {
-    prefix,
-    limit: 100,
-    ...(paginationToken ? { pagination_token: paginationToken } : {}),
-  });
+  if (await getIndexMode() === "documents") {
+    const response = await requestDocumentsApi("list", {
+      prefix,
+      limit: 100,
+      ...(paginationToken ? { pagination_token: paginationToken } : {}),
+    });
 
-  if (!isRecord(response) || !Array.isArray(response.documents)) {
-    throw new Error("Pinecone Documents API returned an invalid list response");
+    if (!isRecord(response) || !Array.isArray(response.documents)) {
+      throw new Error("Pinecone Documents API returned an invalid list response");
+    }
+    return response as unknown as DocumentPage;
   }
 
-  return response as unknown as DocumentPage;
+  const page = await getVectorIndex(getNamespace("vectors")).listPaginated({
+    prefix,
+    limit: 100,
+    ...(paginationToken ? { paginationToken } : {}),
+  });
+  return {
+    documents: (page.vectors ?? []).flatMap((record) =>
+      record.id ? [{ _id: record.id }] : []
+    ),
+    ...(page.pagination?.next ? { pagination: { next: page.pagination.next } } : {}),
+  };
 }
 
 export async function fetchPineconeDocuments(ids: string[]): Promise<FetchedDocuments> {
-  const response = await requestDocumentsApi("fetch", {
-    ids,
-    include_fields: ["repoId"],
-  });
+  if (await getIndexMode() === "documents") {
+    const response = await requestDocumentsApi("fetch", {
+      ids,
+      include_fields: ["repoId"],
+    });
 
-  if (!isRecord(response) || !isRecord(response.documents)) {
-    throw new Error("Pinecone Documents API returned an invalid fetch response");
+    if (!isRecord(response) || !isRecord(response.documents)) {
+      throw new Error("Pinecone Documents API returned an invalid fetch response");
+    }
+    return response as unknown as FetchedDocuments;
   }
 
-  return response as unknown as FetchedDocuments;
+  const response = await getVectorIndex(getNamespace("vectors")).fetch(ids);
+  const documents: Record<string, JsonRecord> = {};
+  for (const [id, record] of Object.entries(response.records ?? {})) {
+    documents[id] = isRecord(record.metadata) ? record.metadata : {};
+  }
+  return { documents };
 }
 
 export async function deletePineconeDocuments(ids: string[]): Promise<void> {
-  await requestDocumentsApi("delete", { ids });
+  if (await getIndexMode() === "documents") {
+    await requestDocumentsApi("delete", { ids });
+    return;
+  }
+  await getVectorIndex(getNamespace("vectors")).deleteMany(ids);
 }
 
-export async function upsertPineconeDocuments(
-  documents: { id: string; values: number[]; metadata: JsonRecord }[]
+export async function upsertPineconeDocuments<T extends object>(
+  documents: { id: string; values: number[]; metadata: T }[]
 ): Promise<void> {
-  if (!EMBEDDING_FIELD.trim()) {
-    throw new Error("PINECONE_EMBEDDING_FIELD must not be empty");
+  if (await getIndexMode() === "documents") {
+    const embeddingField = process.env.PINECONE_EMBEDDING_FIELD?.trim() || "embedding";
+    await requestDocumentsApi("upsert", {
+      documents: documents.map(({ id, values, metadata }) => ({
+        _id: id,
+        ...toPineconeMetadata(metadata),
+        [embeddingField]: values,
+      })),
+    });
+    return;
   }
 
-  const response = await requestDocumentsApi("upsert", {
-    documents: documents.map(({ id, values, metadata }) => ({
-      _id: id,
-      ...metadata,
-      [EMBEDDING_FIELD]: values,
-    })),
-  });
-
-  if (!isRecord(response)) {
-    throw new Error("Pinecone Documents API returned an invalid upsert response");
-  }
+  const records: PineconeRecord[] = documents.map(({ id, values, metadata }) => ({
+    id,
+    values,
+    metadata: toPineconeMetadata(metadata),
+  }));
+  await getVectorIndex(getNamespace("vectors")).upsert(records);
 }
 
 export async function searchPineconeDocuments(
@@ -130,25 +260,41 @@ export async function searchPineconeDocuments(
   repoId: string,
   topK: number
 ): Promise<SearchResponse> {
-  const response = await requestDocumentsApi("search", {
-    score_by: [{ type: "dense_vector", field: EMBEDDING_FIELD, values: embedding }],
-    filter: { repoId },
-    top_k: topK,
-    include_fields: [
-      "repoId",
-      "path",
-      "content",
-      "type",
-      "symbolName",
-      "symbolType",
-      "startLine",
-      "endLine",
-    ],
-  });
+  if (await getIndexMode() === "documents") {
+    const embeddingField = process.env.PINECONE_EMBEDDING_FIELD?.trim() || "embedding";
+    const response = await requestDocumentsApi("search", {
+      score_by: [{ type: "dense_vector", field: embeddingField, values: embedding }],
+      filter: { repoId },
+      top_k: topK,
+      include_fields: [
+        "repoId",
+        "path",
+        "content",
+        "type",
+        "symbolName",
+        "symbolType",
+        "startLine",
+        "endLine",
+      ],
+    });
 
-  if (!isRecord(response) || !Array.isArray(response.matches)) {
-    throw new Error("Pinecone Documents API returned an invalid search response");
+    if (!isRecord(response) || !Array.isArray(response.matches)) {
+      throw new Error("Pinecone Documents API returned an invalid search response");
+    }
+    return response as unknown as SearchResponse;
   }
 
-  return response as unknown as SearchResponse;
+  const response = await getVectorIndex(getNamespace("vectors")).query({
+    vector: embedding,
+    filter: { repoId },
+    topK,
+    includeMetadata: true,
+  });
+  return {
+    matches: (response.matches ?? []).flatMap((match) =>
+      match.id && match.metadata
+        ? [{ _id: match.id, _score: match.score ?? null, ...match.metadata }]
+        : []
+    ),
+  };
 }

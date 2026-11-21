@@ -2,11 +2,12 @@ import { createHash } from "node:crypto";
 import {
   deletePineconeDocuments,
   fetchPineconeDocuments,
+  getPineconeIndexDimension,
   listPineconeDocuments,
   searchPineconeDocuments,
   upsertPineconeDocuments,
 } from "@/lib/pinecone-documents";
-import { embed, embedMany } from "ai";
+import { embedMany } from "ai";
 import { google } from "@ai-sdk/google";
 import {
   generateBedrockEmbeddings,
@@ -17,7 +18,7 @@ import { SYMBOL_PARSER_EXTENSIONS, isIndexablePath } from "@/module/ai/lib/index
 import type { CodeMetadata } from "@/types/ast/type";
 
 const EMBEDDING_MODEL_ID = "gemini-embedding-001";
-const EMBEDDING_DIMENSIONS = 1024;
+const BEDROCK_EMBEDDING_DIMENSIONS = 1024;
 const EMBED_BATCH_SIZE = 50;
 const UPSERT_BATCH_SIZE = 96;
 const PARSE_CONCURRENCY = 5;
@@ -44,24 +45,55 @@ function shouldUseBedrockEmbeddings(): boolean {
 
 export async function generateEmbedding(text: string): Promise<number[]> {
   try {
-    if (shouldUseBedrockEmbeddings()) {
-      const [embedding] = await generateBedrockEmbeddings([text]);
-      return embedding;
-    }
-
-    const { embedding } = await embed({
-      model: google.textEmbeddingModel(EMBEDDING_MODEL_ID),
-      value: text,
-      providerOptions: {
-        google: { outputDimensionality: EMBEDDING_DIMENSIONS },
-      },
-    });
-
+    const [embedding] = await generateEmbeddings([text]);
     return embedding;
   } catch (error) {
     console.error("Failed to generate embedding:", error);
     throw error;
   }
+}
+
+async function generateEmbeddings(texts: string[]): Promise<number[][]> {
+  const dimensions = await getPineconeIndexDimension();
+  let embeddings: number[][];
+
+  if (shouldUseBedrockEmbeddings()) {
+    if (dimensions !== BEDROCK_EMBEDDING_DIMENSIONS) {
+      throw new Error(
+        `Bedrock Titan embeddings are ${BEDROCK_EMBEDDING_DIMENSIONS}-dimensional, but the configured Pinecone index requires ${dimensions}. Select Google embeddings or a matching index.`
+      );
+    }
+    embeddings = await generateBedrockEmbeddings(texts);
+  } else {
+    embeddings = (
+      await embedMany({
+        model: google.textEmbeddingModel(EMBEDDING_MODEL_ID),
+        values: texts,
+        providerOptions: {
+          google: { outputDimensionality: dimensions },
+        },
+      })
+    ).embeddings;
+  }
+
+  if (embeddings.length !== texts.length) {
+    throw new Error(
+      `Embedding provider returned ${embeddings.length} vectors for ${texts.length} items`
+    );
+  }
+
+  for (const [index, embedding] of embeddings.entries()) {
+    if (
+      embedding.length !== dimensions ||
+      embedding.some((value) => !Number.isFinite(value))
+    ) {
+      throw new Error(
+        `Embedding provider returned an invalid vector for the configured ${dimensions}-dimension Pinecone index (item ${index})`
+      );
+    }
+  }
+
+  return embeddings;
 }
 
 // The separator cannot appear in "owner/repo", so one repository's prefix never matches another's.
@@ -239,17 +271,7 @@ export async function indexCodebase(
     const batch = pending.slice(i, i + EMBED_BATCH_SIZE);
 
     try {
-      const embeddings = shouldUseBedrockEmbeddings()
-        ? await generateBedrockEmbeddings(batch.map((item) => item.text))
-        : (
-            await embedMany({
-              model: google.textEmbeddingModel(EMBEDDING_MODEL_ID),
-              values: batch.map((item) => item.text),
-              providerOptions: {
-                google: { outputDimensionality: EMBEDDING_DIMENSIONS },
-              },
-            })
-          ).embeddings;
+      const embeddings = await generateEmbeddings(batch.map((item) => item.text));
 
       if (embeddings.length !== batch.length) {
         throw new Error(
