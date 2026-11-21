@@ -26,13 +26,9 @@ export default function ContributionGraph() {
     const end = new Date();
     const start = new Date(end);
     start.setUTCDate(start.getUTCDate() - 364);
-    let seed = 42;
-    const rand = () => {
-      seed = (seed * 9301 + 49297) % 233280;
-      return seed / 233280;
-    };
     for (let t = start.getTime(); t <= end.getTime(); t += 86_400_000) {
-      const roll = rand();
+      const daySeed = 42 + Math.floor(t / 86_400_000);
+      const roll = ((daySeed * 9301 + 49297) % 233280) / 233280;
       const count =
         roll > 0.72
           ? Math.floor(roll * 12)

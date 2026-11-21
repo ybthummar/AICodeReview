@@ -22,7 +22,7 @@ import {
   dissconnectAllRepository,
 } from "../actions";
 import { toast } from "sonner";
-import { ExternalLink, Trash2, AlertTriangle, Loader2 } from "lucide-react";
+import { Trash2, AlertTriangle, Loader2 } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,

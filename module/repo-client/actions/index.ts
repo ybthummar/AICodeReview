@@ -209,7 +209,6 @@ export async function sendEmail(repositoryId: string) {
       const { sendMail, wrapEmailTemplate } = await import("@/lib/mail");
       const emailHtml = wrapEmailTemplate(aiSummary.html, repo.name);
 
-      let sentCount = 0;
       for (const rc of repo.repositoryClients) {
         try {
           await sendMail({
@@ -222,7 +221,6 @@ export async function sendEmail(repositoryId: string) {
             where: { id: rc.id },
             data: { deliveredAt: new Date() },
           });
-          sentCount++;
         } catch (mailErr) {
           console.error(`Failed to send email to ${rc.client.email}:`, mailErr);
           throw mailErr;
