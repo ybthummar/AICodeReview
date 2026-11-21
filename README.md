@@ -22,7 +22,7 @@ AICodeReview is a developer-focused web application that automates repository an
 - Audit log and exports (`/dashboard/audit`): activity history, findings CSV and a printable weekly or monthly report.
 - PRO subscriptions run for 30 days per payment, can be extended, and a daily job downgrades expired accounts and sends a renewal reminder three days ahead.
 - Ask your codebase: RAG chat with file and line citations (`/dashboard/chat`).
-- AI Toolkit: PR description generator (can update the PR), unit-test generator, release notes, on-demand security scan (`/dashboard/toolkit`).
+- AI Toolkit includes PR descriptions, unit tests, release notes, security scans, and GitHub issue investigation (`/dashboard/toolkit`).
 - Team workspaces with Owner / Admin / Member / Viewer roles and shared repositories (`/dashboard/team`).
 - Slack, Discord and Microsoft Teams alerts for completed reviews (Settings).
 - Free-plan monthly quotas with a usage meter (reviews, codebase questions, toolkit runs).
@@ -39,7 +39,7 @@ AICodeReview is a developer-focused web application that automates repository an
 - Database: Prisma with a relational DB (Postgres recommended) for users, repos, reviews, and subscriptions.
 - Vector store: Pinecone (or equivalent) stores embeddings for repository content to enable RAG lookups.
 - AI layer: `module/ai/` contains the retrieval + generation pipeline that composes prompts with retrieved context.
-- Integrations: GitHub (API + webhooks), Razorpay (checkout + webhooks), and an LLM provider (OpenAI or other).
+- Integrations include GitHub, Razorpay, and Google Gemini.
 
 ## Tech stack
 
@@ -48,7 +48,7 @@ AICodeReview is a developer-focused web application that automates repository an
 - ORM: Prisma (Postgres / compatible)
 - Vector DB: Pinecone
 - Background jobs / orchestration: Inngest
-- AI / LLM: Provider configurable via environment (OpenAI, etc.)
+- AI / LLM uses Gemini for embeddings and Gemini, Deploy DeepSeek, Z.AI GLM, and OpenAI for text generation.
 - Payments: Razorpay
 
 ## Repository overview (where to look)
@@ -64,6 +64,8 @@ AICodeReview is a developer-focused web application that automates repository an
 
 ## Getting started (local development)
 
+Use Node.js 22.12 or newer on the 22.x line, or Node.js 24 or newer.
+
 1. Clone the repository and install dependencies:
 
 ```bash
@@ -78,17 +80,9 @@ npm install
 DATABASE_URL=postgresql://user:pass@localhost:5432/aicodereview
 NEXT_PUBLIC_VERCEL_URL=http://localhost:3000
 PINECONE_API_KEY=
-PINECONE_ENV=us-west1-gcp
-AI_EMBEDDING_PROVIDER=bedrock
 PINECONE_GOOGLE_INDEX=repopilot-v2
-PINECONE_BEDROCK_INDEX=repopilot-bedrock-v2
 INNGEST_EVENT_KEY=
 INNGEST_SIGNING_KEY=
-AWS_ACCESS_KEY_ID= # use a scoped IAM identity; keep server-side
-AWS_SECRET_ACCESS_KEY= # never expose with NEXT_PUBLIC_ or commit to source control
-AWS_REGION=ap-southeast-2
-BEDROCK_CHAT_MODEL_ID=arn:aws:bedrock:ap-southeast-2:888293064922:inference-profile/au.anthropic.claude-sonnet-4-6
-BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
 RAZORPAY_KEY_ID=
 RAZORPAY_KEY_SECRET=
 RAZORPAY_WEBHOOK_SECRET= # required: unsigned Razorpay webhooks are rejected
@@ -99,10 +93,22 @@ GITHUB_TOKEN= # optional fallback
 GITHUB_APP_ID=
 GITHUB_APP_PRIVATE_KEY= # PEM, newlines may be written as \n
 GITHUB_APP_SLUG=
-GOOGLE_GENERATIVE_AI_API_KEY= # fallback for text generation; also used when Bedrock embeddings are not configured
+GOOGLE_GENERATIVE_AI_API_KEY=
+# Optional text generation fallbacks
+DEPLOY_API_KEY=
+GLM_API_KEY=
+OPENAI_API_KEY=
+# Optional saved OpenAI agent for the Issue Investigation tab
+OPENAI_ISSUE_AGENT_ID=
 ```
 
-Bedrock Runtime requests use the AWS SDK credential provider chain and SigV4, not bearer-token authentication. Locally, set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_REGION`; in production, prefer an attached IAM role. Configure `PINECONE_GOOGLE_INDEX` and `PINECONE_BEDROCK_INDEX` separately. The app selects the corresponding index based on `AI_EMBEDDING_PROVIDER`, so chat, indexing, cleanup, and retrieval all use the same provider-specific index. The existing `repopilot-v2` index contains Google embeddings; the separate `repopilot-bedrock-v2` index is 1,024-dimensional and should receive a full re-index with Titan before chat uses it. Set `AI_EMBEDDING_PROVIDER=bedrock` and `PINECONE_BEDROCK_INDEX=repopilot-bedrock-v2` for Titan. The app detects vector vs. Documents API and reads the selected index dimension automatically. Do not mix embedding models in an index; changing providers requires indexing that provider's index. `PINECONE_NAMESPACE` is optional; the app uses the appropriate default namespace for each Pinecone API. Schema-based indexes use `X-Pinecone-Api-Version: 2026-07`.
+RepoPilot uses `gemini-embedding-001` for repository indexing and for search queries from codebase chat and reviews. Set `PINECONE_GOOGLE_INDEX` to an index for that model. The app reads the index dimension and requests matching vectors from Gemini. `PINECONE_NAMESPACE` is optional. The app detects the Pinecone API mode and uses its default namespace when the variable is empty. Schema-based indexes use `X-Pinecone-Api-Version: 2026-07`.
+
+When migrating from Bedrock Titan, point `PINECONE_GOOGLE_INDEX` at the existing Gemini index or a new dense cosine index. Use **Re-index** in codebase chat for repositories missing from the Gemini index. Existing vectors from `gemini-embedding-001` in the configured index and namespace can be reused.
+
+Text generation tries Gemini, Deploy DeepSeek V4.1 Flash, Z.AI GLM-4.7-Flash, then OpenAI Responses with GPT-6 Luna. Each provider is enabled by its server-side API key. The app also accepts `GLM_ACCESS_KEY` and `OPEN_AI_API_KEY` as aliases. Set `DEPLOY_MODEL`, `GLM_MODEL`, or `OPENAI_TEXT_MODEL` to override a default model. This order applies to PR reviews, codebase chat, Toolkit generation, and client summaries. [Z.AI model pricing](https://docs.z.ai/guides/overview/pricing) · [GPT-6 Luna availability and pricing](https://developers.openai.com/api/docs/models/gpt-6-luna)
+
+In **AI Toolkit → Issue Investigation**, members can choose a connected repository and an issue number. RepoPilot reads the issue, discussion, and available index excerpts using the workspace's repository access. Configure `OPENAI_ISSUE_AGENT_ID` and an OpenAI project key with Agents API access to use the saved agent. Agent sessions can search the web for public repositories. The report appears in the Toolkit and can be copied. If the saved agent is unavailable, the Toolkit uses the text-generation fallbacks. [OpenAI Agents API setup](https://developers.openai.com/api/docs/guides/agents-api/quickstart)
 
 3. Generate Prisma client and run migrations (dev). Two migrations must be applied before starting the app: `20261111120000_add_rules_teams_notifications` (review rules, workspaces, alert channels) and `20261111180000_add_expiry_feedback_keys_audit` (subscription expiry and payments, finding feedback, API keys, audit log, GitHub App installations):
 
@@ -170,7 +176,7 @@ Check `package.json` for exact script names used in this repo.
 ## Troubleshooting
 
 - Prisma client issues: run `npx prisma generate`.
-- Pinecone errors: verify `PINECONE_API_KEY`, `PINECONE_INDEX`, and index readiness.
+- For Pinecone errors, verify `PINECONE_API_KEY` (or `PINECOIN_DB_API_KEY`), `PINECONE_GOOGLE_INDEX`, and index readiness.
 - Webhook testing locally: use `ngrok` and ensure webhook secrets match.
 
 ## Extending the project
@@ -190,7 +196,7 @@ Add a `LICENSE` file at the repository root to state your desired license (MIT, 
 
 ## Acknowledgements
 
-Built with Next.js, Prisma, Pinecone, Inngest, Tailwind, and Razorpay. AI pipelines are provider-agnostic; configure an LLM key in your environment.
+Built with Next.js, Prisma, Gemini, Pinecone, Inngest, Tailwind, and Razorpay.
 
 ----
 

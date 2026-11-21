@@ -11,6 +11,7 @@ import {
   FlaskConical,
   Loader2,
   Megaphone,
+  Search,
   ShieldCheck,
   Sparkles,
   Upload,
@@ -31,17 +32,19 @@ import {
   generateReleaseNotes,
   generateTestsForPullRequest,
   getToolkitPullRequests,
+  investigateRepositoryIssue,
   scanPullRequestSecurity,
 } from "@/module/toolkit/actions";
 import { hasRole } from "@/module/team/lib/roles";
 
-type TabId = "description" | "tests" | "release" | "security";
+type TabId = "description" | "tests" | "release" | "security" | "issue";
 
 const TABS: { id: TabId; label: string; icon: React.ElementType; needsPr: boolean }[] = [
   { id: "description", label: "PR Description", icon: FileText, needsPr: true },
   { id: "tests", label: "Test Generator", icon: FlaskConical, needsPr: true },
   { id: "release", label: "Release Notes", icon: Megaphone, needsPr: false },
   { id: "security", label: "Security Scan", icon: ShieldCheck, needsPr: true },
+  { id: "issue", label: "Issue Investigation", icon: Search, needsPr: false },
 ];
 
 function CopyButton({ text }: { text: string }) {
@@ -75,6 +78,7 @@ function ToolkitContent() {
   );
   const [repoOverride, setRepoOverride] = useState(params.get("repo") ?? "");
   const [prNumber, setPrNumber] = useState(params.get("pr") ?? "");
+  const [issueNumber, setIssueNumber] = useState(params.get("issue") ?? "");
   const [days, setDays] = useState("7");
 
   const [title, setTitle] = useState("");
@@ -112,6 +116,8 @@ function ToolkitContent() {
   const activeTab = TABS.find((t) => t.id === tab) ?? TABS[0];
   const prValue = Number.parseInt(prNumber, 10);
   const hasPr = Number.isInteger(prValue) && prValue > 0;
+  const issueValue = Number(issueNumber);
+  const hasIssue = Number.isSafeInteger(issueValue) && issueValue > 0;
 
   const afterRun = () => queryClient.invalidateQueries({ queryKey: USAGE_QUERY_KEY });
 
@@ -162,24 +168,38 @@ function ToolkitContent() {
     },
   });
 
+  const investigate = useMutation({
+    mutationFn: ({ repoId, number }: { repoId: string; number: number }) => investigateRepositoryIssue(repoId, number),
+    onSuccess: (result) => {
+      afterRun();
+      if (!result.ok) toast.error(result.error);
+    },
+    onError: () => toast.error("Could not investigate the issue. Please try again."),
+  });
+
   const scanResult = scan.data && scan.data.ok ? scan.data.data : null;
+  const issueResult = investigate.data?.ok && investigate.variables?.repoId === repositoryId &&
+    investigate.variables.number === issueValue ? investigate.data.data : null;
 
   const busy =
     (tab === "description" && describe.isPending) ||
     (tab === "tests" && tests.isPending) ||
     (tab === "release" && release.isPending) ||
-    (tab === "security" && scan.isPending);
+    (tab === "security" && scan.isPending) ||
+    (tab === "issue" && investigate.isPending);
 
   const runDisabled =
     busy ||
     !repositoryId ||
     (activeTab.needsPr && !hasPr) ||
+    (tab === "issue" && !hasIssue) ||
     (tab !== "security" && !canGenerate);
 
   const run = () => {
     if (tab === "description") describe.mutate();
     else if (tab === "tests") tests.mutate();
     else if (tab === "release") release.mutate();
+    else if (tab === "issue") investigate.mutate({ repoId: repositoryId, number: issueValue });
     else scan.mutate();
   };
 
@@ -191,7 +211,7 @@ function ToolkitContent() {
             <Wrench className="h-7 w-7 text-blue-600" /> AI Toolkit
           </h1>
           <p className="mt-1 text-sm text-slate-500">
-            Generate pull request descriptions, unit tests and release notes, or scan a PR for leaked secrets and vulnerable packages.
+            Generate descriptions, tests and release notes, scan pull requests, or investigate a GitHub issue.
           </p>
         </div>
       </div>
@@ -224,6 +244,7 @@ function ToolkitContent() {
                 onChange={(e) => {
                   setRepoOverride(e.target.value);
                   setPrNumber("");
+                  setIssueNumber("");
                 }}
                 className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
               >
@@ -258,6 +279,11 @@ function ToolkitContent() {
                   ))}
                 </select>
               </div>
+            ) : tab === "issue" ? (
+              <div>
+                <label htmlFor="issue-number" className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-600">GitHub issue number</label>
+                <Input id="issue-number" type="number" min={1} step={1} placeholder="128" value={issueNumber} onChange={(e) => setIssueNumber(e.target.value)} />
+              </div>
             ) : (
               <div>
                 <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-600">Period</label>
@@ -280,7 +306,7 @@ function ToolkitContent() {
               className="h-10 gap-2 bg-blue-600 text-white hover:bg-blue-700"
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              {tab === "security" ? "Run scan" : "Generate"}
+              {tab === "security" ? "Run scan" : tab === "issue" ? "Investigate" : "Generate"}
             </Button>
           </div>
 
@@ -378,6 +404,22 @@ function ToolkitContent() {
           <CardContent>
             <MarkdownView>{releaseMarkdown}</MarkdownView>
           </CardContent>
+        </Card>
+      )}
+
+      {tab === "issue" && issueResult && (
+        <Card className="border-slate-200/80 bg-white shadow-sm">
+          <CardHeader className="flex flex-row items-center justify-between gap-3">
+            <div>
+              <CardTitle className="text-lg">{issueResult.title}</CardTitle>
+              <CardDescription>
+                {issueResult.usedAgent ? "OpenAI issue agent" : "AI investigation"} · {" "}
+                <a className="underline" href={issueResult.url} target="_blank" rel="noreferrer">Open issue on GitHub</a>
+              </CardDescription>
+            </div>
+            <CopyButton text={issueResult.markdown} />
+          </CardHeader>
+          <CardContent><MarkdownView>{issueResult.markdown}</MarkdownView></CardContent>
         </Card>
       )}
 

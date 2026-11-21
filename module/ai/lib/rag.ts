@@ -9,16 +9,11 @@ import {
 } from "@/lib/pinecone-documents";
 import { embedMany } from "ai";
 import { google } from "@ai-sdk/google";
-import {
-  generateBedrockEmbeddings,
-} from "@/module/ai/lib/bedrock";
-import { getEmbeddingProvider } from "@/module/ai/lib/embedding-provider";
 import { parseWithASTService } from "@/module/ast/client";
 import { SYMBOL_PARSER_EXTENSIONS, isIndexablePath } from "@/module/ai/lib/indexable";
 import type { CodeMetadata } from "@/types/ast/type";
 
 const EMBEDDING_MODEL_ID = "gemini-embedding-001";
-const BEDROCK_EMBEDDING_DIMENSIONS = 1024;
 const EMBED_BATCH_SIZE = 50;
 const UPSERT_BATCH_SIZE = 96;
 const PARSE_CONCURRENCY = 5;
@@ -39,30 +34,17 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 
 async function generateEmbeddings(texts: string[]): Promise<number[][]> {
   const dimensions = await getPineconeIndexDimension();
-  let embeddings: number[][];
-
-  if (getEmbeddingProvider() === "bedrock") {
-    if (dimensions !== BEDROCK_EMBEDDING_DIMENSIONS) {
-      throw new Error(
-        `Bedrock Titan embeddings are ${BEDROCK_EMBEDDING_DIMENSIONS}-dimensional, but the configured Pinecone index requires ${dimensions}. Select Google embeddings or a matching index.`
-      );
-    }
-    embeddings = await generateBedrockEmbeddings(texts);
-  } else {
-    embeddings = (
-      await embedMany({
-        model: google.textEmbeddingModel(EMBEDDING_MODEL_ID),
-        values: texts,
-        providerOptions: {
-          google: { outputDimensionality: dimensions },
-        },
-      })
-    ).embeddings;
-  }
+  const { embeddings } = await embedMany({
+    model: google.textEmbeddingModel(EMBEDDING_MODEL_ID),
+    values: texts,
+    providerOptions: {
+      google: { outputDimensionality: dimensions },
+    },
+  });
 
   if (embeddings.length !== texts.length) {
     throw new Error(
-      `Embedding provider returned ${embeddings.length} vectors for ${texts.length} items`
+      `Gemini returned ${embeddings.length} vectors for ${texts.length} items`
     );
   }
 
@@ -72,7 +54,7 @@ async function generateEmbeddings(texts: string[]): Promise<number[][]> {
       embedding.some((value) => !Number.isFinite(value))
     ) {
       throw new Error(
-        `Embedding provider returned an invalid vector for the configured ${dimensions}-dimension Pinecone index (item ${index})`
+        `Gemini returned an invalid vector for the configured ${dimensions}-dimension Pinecone index (item ${index})`
       );
     }
   }
@@ -256,19 +238,8 @@ export async function indexCodebase(
 
     try {
       const embeddings = await generateEmbeddings(batch.map((item) => item.text));
-
-      if (embeddings.length !== batch.length) {
-        throw new Error(
-          `Embedding provider returned ${embeddings.length} vectors for ${batch.length} items`
-        );
-      }
-
-      batch.forEach((item, index) => {
-        const values = embeddings[index];
-        if (!values.length || values.some((value) => !Number.isFinite(value))) {
-          throw new Error(`Embedding provider returned an invalid vector for ${item.id}`);
-        }
-        vectors.push({ id: item.id, values, metadata: item.metadata });
+      batch.forEach(({ id, metadata }, index) => {
+        vectors.push({ id, values: embeddings[index], metadata });
       });
     } catch (error) {
       console.error(`Failed to embed batch starting at ${i} for ${repoId}:`, error);

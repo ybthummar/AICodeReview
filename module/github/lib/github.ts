@@ -10,6 +10,29 @@ import {
   MAX_INDEXED_FILES,
 } from "@/module/ai/lib/indexable";
 
+export async function getGitHubIssueContext(token: string, owner: string, repo: string, issueNumber: number) {
+  const octokit = new Octokit({ auth: token });
+  const params = { owner, repo, issue_number: issueNumber };
+  const [{ data: issue }, { data: repository }] = await Promise.all([
+    octokit.rest.issues.get(params),
+    octokit.rest.repos.get({ owner, repo }),
+  ]);
+  if (issue.pull_request) return null;
+
+  const comments = issue.comments > 0
+    ? (await octokit.rest.issues.listComments({ ...params, per_page: 20 })).data
+    : [];
+
+  return {
+    title: issue.title,
+    body: issue.body?.slice(0, 8000) ?? "",
+    state: issue.state,
+    url: issue.html_url,
+    publicRepository: repository.visibility === "public",
+    discussion: comments.map((comment) => comment.body?.slice(0, 750) ?? "").filter(Boolean),
+  };
+}
+
 export const getGitHubToken = async () => {
   const session = await auth.api.getSession({
     headers: await headers(),

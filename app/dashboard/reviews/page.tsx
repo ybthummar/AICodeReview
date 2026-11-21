@@ -725,7 +725,7 @@ export default function ReviewPage() {
                   >
                     {isTriggering ? (
                       <>
-                        <Loader2 className="w-4 h-4 animate-spin" /> Analyzing with Gemini...
+                        <Loader2 className="w-4 h-4 animate-spin" /> Analyzing changes...
                       </>
                     ) : (
                       <>

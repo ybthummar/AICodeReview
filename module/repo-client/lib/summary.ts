@@ -1,6 +1,5 @@
-import { generateText } from "ai";
-import { google } from "@ai-sdk/google";
 import { escapeHtml } from "@/lib/mail";
+import { generateWithFallback } from "@/module/ai/lib/generate";
 import { parseReviewContent } from "@/module/review/lib/insights";
 
 export type RepoInput = {
@@ -76,11 +75,7 @@ Output JSON format:
 }
 `;
 
-    const { text } = await generateText({
-      model: google("gemini-flash-lite-latest"),
-      temperature: 0.3,
-      prompt,
-    });
+    const text = await generateWithFallback(prompt, { temperature: 0.3 });
 
     let parsed;
     try {
