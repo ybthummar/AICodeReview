@@ -11,8 +11,8 @@ import { embedMany } from "ai";
 import { google } from "@ai-sdk/google";
 import {
   generateBedrockEmbeddings,
-  isBedrockEmbeddingConfigured,
 } from "@/module/ai/lib/bedrock";
+import { getEmbeddingProvider } from "@/module/ai/lib/embedding-provider";
 import { parseWithASTService } from "@/module/ast/client";
 import { SYMBOL_PARSER_EXTENSIONS, isIndexablePath } from "@/module/ai/lib/indexable";
 import type { CodeMetadata } from "@/types/ast/type";
@@ -26,22 +26,6 @@ const MAX_ID_LENGTH = 500;
 const MAX_FILE_CHARS = 8000;
 const FILE_CHUNK_OVERLAP = 500;
 const MAX_SYMBOL_CHARS = 2000;
-
-function shouldUseBedrockEmbeddings(): boolean {
-  const provider = process.env.AI_EMBEDDING_PROVIDER?.trim().toLowerCase();
-
-  if (provider === "bedrock") {
-    if (!isBedrockEmbeddingConfigured()) {
-      throw new Error("AI_EMBEDDING_PROVIDER is bedrock, but Bedrock credentials are not configured.");
-    }
-    return true;
-  }
-  if (provider && provider !== "google") {
-    throw new Error('AI_EMBEDDING_PROVIDER must be either "bedrock" or "google".');
-  }
-
-  return false;
-}
 
 export async function generateEmbedding(text: string): Promise<number[]> {
   try {
@@ -57,7 +41,7 @@ async function generateEmbeddings(texts: string[]): Promise<number[][]> {
   const dimensions = await getPineconeIndexDimension();
   let embeddings: number[][];
 
-  if (shouldUseBedrockEmbeddings()) {
+  if (getEmbeddingProvider() === "bedrock") {
     if (dimensions !== BEDROCK_EMBEDDING_DIMENSIONS) {
       throw new Error(
         `Bedrock Titan embeddings are ${BEDROCK_EMBEDDING_DIMENSIONS}-dimensional, but the configured Pinecone index requires ${dimensions}. Select Google embeddings or a matching index.`

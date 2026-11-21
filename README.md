@@ -79,7 +79,9 @@ DATABASE_URL=postgresql://user:pass@localhost:5432/aicodereview
 NEXT_PUBLIC_VERCEL_URL=http://localhost:3000
 PINECONE_API_KEY=
 PINECONE_ENV=us-west1-gcp
-PINECONE_INDEX=aicodereview-bedrock-1024
+AI_EMBEDDING_PROVIDER=google
+PINECONE_GOOGLE_INDEX=repopilot-v2
+PINECONE_BEDROCK_INDEX=repopilot-bedrock-v2
 INNGEST_EVENT_KEY=
 INNGEST_SIGNING_KEY=
 AWS_BEARER_TOKEN_BEDROCK= # keep server-side; never expose with NEXT_PUBLIC_
@@ -99,7 +101,7 @@ GITHUB_APP_SLUG=
 GOOGLE_GENERATIVE_AI_API_KEY= # fallback for text generation; also used when Bedrock embeddings are not configured
 ```
 
-Set `PINECONE_INDEX` to the index that contains your repository data; the app does not hardcode an index and detects whether it must use Pinecone's Documents API or vector API. It also reads the index's dimension and requests Google `gemini-embedding-001` vectors at that size. The existing `repopilot-v2` index is a 3,072-dimensional vector index; keep `AI_EMBEDDING_PROVIDER=google` to query its existing Google embeddings. The separate `repopilot-bedrock-v2` index is a 1,024-dimensional Documents API index and is empty until data is indexed there. Setting `PINECONE_INDEX` to a different index will not move or find the old index's data. Do not mix embedding models in one index; changing providers requires re-indexing all repository data. Bedrock Titan currently returns 1,024 dimensions and should only be used with a matching index after its model permissions are confirmed. `PINECONE_NAMESPACE` is optional; the app uses the appropriate default namespace for each Pinecone API. Schema-based indexes use `X-Pinecone-Api-Version: 2026-07`.
+Configure `PINECONE_GOOGLE_INDEX` and `PINECONE_BEDROCK_INDEX` separately. The app selects the corresponding index based on `AI_EMBEDDING_PROVIDER`, so chat, indexing, cleanup, and retrieval all use the same provider-specific index. The existing `repopilot-v2` index is a 3,072-dimensional vector index containing the Google embeddings already created for `ybthummar/AICodeReview`; set `AI_EMBEDDING_PROVIDER=google` and `PINECONE_GOOGLE_INDEX=repopilot-v2` to use that data. The separate `repopilot-bedrock-v2` index is a 1,024-dimensional Documents API index; set `AI_EMBEDDING_PROVIDER=bedrock` and `PINECONE_BEDROCK_INDEX=repopilot-bedrock-v2` only when Bedrock Titan access works and after that index has been indexed with Titan embeddings. The app detects vector vs. Documents API and reads the selected index dimension automatically. Do not mix embedding models in an index; changing providers requires indexing that provider's index. `PINECONE_NAMESPACE` is optional; the app uses the appropriate default namespace for each Pinecone API. Schema-based indexes use `X-Pinecone-Api-Version: 2026-07`.
 
 3. Generate Prisma client and run migrations (dev). Two migrations must be applied before starting the app: `20261111120000_add_rules_teams_notifications` (review rules, workspaces, alert channels) and `20261111180000_add_expiry_feedback_keys_audit` (subscription expiry and payments, finding feedback, API keys, audit log, GitHub App installations):
 

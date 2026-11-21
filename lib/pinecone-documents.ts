@@ -1,4 +1,5 @@
 import { pinecone } from "@/lib/pinecone";
+import { getEmbeddingProvider } from "@/module/ai/lib/embedding-provider";
 import type { PineconeRecord } from "@pinecone-database/pinecone";
 
 const API_VERSION = "2026-07";
@@ -59,9 +60,18 @@ function toPineconeMetadata(metadata: object): PineconeMetadata {
 }
 
 function getIndexName(): string {
-  const indexName = process.env.PINECONE_INDEX?.trim().toLowerCase();
+  const provider = getEmbeddingProvider();
+  const indexName = (
+    provider === "google"
+      ? process.env.PINECONE_GOOGLE_INDEX
+      : process.env.PINECONE_BEDROCK_INDEX
+  )
+    ?.trim()
+    .toLowerCase();
+
   if (!indexName) {
-    throw new Error("PINECONE_INDEX must name the Pinecone index to use.");
+    const variable = provider === "google" ? "PINECONE_GOOGLE_INDEX" : "PINECONE_BEDROCK_INDEX";
+    throw new Error(`${variable} must name the Pinecone index for ${provider} embeddings.`);
   }
   return indexName;
 }
