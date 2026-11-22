@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   Bot,
@@ -18,7 +18,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import MarkdownView from "@/components/markdown-view";
-import { getAccessibleRepositories } from "@/module/team/actions";
+import {
+  ACCESSIBLE_REPOSITORIES_QUERY_KEY,
+  useAccessibleRepositories,
+} from "@/module/team/hooks/use-accessible-repositories";
+import { indexInProgress } from "@/module/repository/lib/index-status";
 import {
   askCodebase,
   reindexRepository,
@@ -48,16 +52,14 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const transcriptRef = useRef<HTMLDivElement>(null);
 
-  const repositoriesQuery = useQuery({
-    queryKey: ["accessible-repositories", "VIEWER"],
-    queryFn: async () => await getAccessibleRepositories("VIEWER"),
-    staleTime: 1000 * 60,
-  });
+  const repositoriesQuery = useAccessibleRepositories();
 
   const repositories = repositoriesQuery.data ?? [];
   const selected = repositories.find((repository) => repository.id === selectedId) ?? repositories[0];
   const repositoryId = selected?.id ?? "";
   const messages = threads[repositoryId] ?? EMPTY_THREAD;
+  const indexing = indexInProgress(selected?.indexStatus ?? null);
+  const canAsk = selected?.indexStatus === "ready";
 
   const ask = useMutation({
     mutationFn: (request: Parameters<typeof askCodebase>[0]) => askCodebase(request),
@@ -76,6 +78,7 @@ export default function ChatPage() {
     mutationFn: (id: string) => reindexRepository(id),
     onSuccess: (result) => {
       if (result.ok) {
+        void queryClient.invalidateQueries({ queryKey: ACCESSIBLE_REPOSITORIES_QUERY_KEY });
         toast.success("Re-index queued. It can take a few minutes for large repositories.");
       } else {
         toast.error(result.error);
@@ -97,7 +100,7 @@ export default function ChatPage() {
 
   const send = (question: string) => {
     const text = question.trim();
-    if (!text || ask.isPending || !repositoryId) return;
+    if (!text || ask.isPending || !repositoryId || !canAsk) return;
 
     setThreads((previous) => ({
       ...previous,
@@ -153,14 +156,29 @@ export default function ChatPage() {
               variant="outline"
               size="sm"
               onClick={() => reindex.mutate(repositoryId)}
-              disabled={reindex.isPending}
+              disabled={reindex.isPending || indexing}
               className="gap-1.5"
             >
-              {reindex.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
-              Re-index
+              {reindex.isPending || indexing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
+              {indexing ? "Indexing..." : "Re-index"}
             </Button>
           )}
         </div>
+        {selected && !canAsk && (
+          <div className="border-b border-slate-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-900 sm:px-6" role="status">
+            {indexing
+              ? `Indexing ${selected.fullName}${selected.indexFilesTotal === null
+                ? " — preparing repository files..."
+                : ` — ${Math.min(selected.indexFilesDone, selected.indexFilesTotal)} of ${selected.indexFilesTotal} files processed.`}`
+              : selected.indexStatus === "failed"
+                ? "Indexing failed. Re-index the repository to try again."
+                : selected.indexStatus === "empty"
+                  ? "Indexing finished, but no indexable files were found."
+                    : selected.role === "OWNER"
+                      ? "Indexing has not started yet. Use Re-index to begin."
+                      : "Indexing has not started yet. Ask the repository owner to re-index it."}
+          </div>
+        )}
         <div ref={transcriptRef} role="log" aria-label="Codebase conversation" className="min-h-64 max-h-[max(19rem,calc(100dvh-21rem))] flex-1 space-y-5 overflow-y-auto overscroll-contain p-4 sm:p-6">
           {repositoriesQuery.isError ? (
             <div className="flex flex-col items-center gap-3 py-12 text-center text-sm text-slate-700" role="alert">
@@ -175,6 +193,10 @@ export default function ChatPage() {
             <div className="flex flex-col items-center gap-3 py-12 text-center text-sm text-slate-700">
               Connect a repository to ask questions about its code.
               <Button asChild variant="outline" size="sm"><Link href="/dashboard/repositories">Connect repository</Link></Button>
+            </div>
+          ) : messages.length === 0 && !canAsk ? (
+            <div className="flex items-center justify-center py-16 text-center text-sm text-slate-600">
+              Questions will be available when repository indexing is ready.
             </div>
           ) : messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-4 py-5 text-center sm:py-8">
@@ -193,7 +215,7 @@ export default function ChatPage() {
                     key={starter}
                     type="button"
                     onClick={() => send(starter)}
-                    disabled={!repositoryId || ask.isPending}
+                    disabled={!repositoryId || !canAsk || ask.isPending}
                     className="cursor-pointer rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2.5 text-left text-sm text-slate-700 transition-colors hover:border-blue-300 hover:bg-blue-50/50 focus-visible:outline-2 focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {starter}
@@ -289,13 +311,13 @@ export default function ChatPage() {
             }}
             rows={2}
             maxLength={1000}
-            placeholder={repositoryId ? "Ask about this repository" : "Connect a repository first"}
-            disabled={!repositoryId}
+            placeholder={!repositoryId ? "Connect a repository first" : canAsk ? "Ask about this repository" : "Available when indexing is complete"}
+            disabled={!repositoryId || !canAsk}
             className="min-w-0 flex-1 resize-none rounded-lg border border-slate-300 bg-white px-3 py-2 text-base focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-60 sm:text-sm"
           />
           <Button
             type="submit"
-            disabled={!input.trim() || ask.isPending || !repositoryId}
+            disabled={!input.trim() || ask.isPending || !repositoryId || !canAsk}
             className="h-10 gap-1.5 bg-blue-600 text-white hover:bg-blue-700"
           >
             <Send className="h-4 w-4" /> Ask

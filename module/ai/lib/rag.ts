@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import prisma from "@/lib/db";
 import {
   deletePineconeDocuments,
   fetchPineconeDocuments,
@@ -15,7 +16,7 @@ import type { CodeMetadata } from "@/types/ast/type";
 
 const EMBEDDING_MODEL_ID = "gemini-embedding-001";
 const EMBED_BATCH_SIZE = 50;
-const UPSERT_BATCH_SIZE = 96;
+const UPSERT_BATCH_SIZE = 50;
 const PARSE_CONCURRENCY = 5;
 const MAX_ID_LENGTH = 500;
 const MAX_FILE_CHARS = 8000;
@@ -32,11 +33,13 @@ export async function generateEmbedding(text: string): Promise<number[]> {
   }
 }
 
-async function generateEmbeddings(texts: string[]): Promise<number[][]> {
+async function generateEmbeddings(texts: string[], maxRetries?: number): Promise<number[][]> {
   const dimensions = await getPineconeIndexDimension();
   const { embeddings } = await embedMany({
     model: google.textEmbeddingModel(EMBEDDING_MODEL_ID),
     values: texts,
+    maxRetries,
+    abortSignal: AbortSignal.timeout(25_000),
     providerOptions: {
       google: { outputDimensionality: dimensions },
     },
@@ -152,36 +155,44 @@ async function deleteIds(ids: string[]) {
   }
 }
 
-// Removes every vector of one repository, including ids written by the older "repo-path" scheme.
-export async function purgeRepositoryVectors(
-  repoId: string,
-  keepIds: ReadonlySet<string> = new Set()
-): Promise<number> {
-  const current = await listIdsWithPrefix(`${repoId}::`);
-  const stale = current.filter((id) => !keepIds.has(id));
-  await deleteIds(stale);
+export function repositoryIndexKey(fullName: string, revision?: string | null) {
+  return revision ? `${fullName}@${revision}` : fullName;
+}
+
+export async function repositoryIndexIsVisible(indexKey: string, vectorCount: number) {
+  return (await listIdsWithPrefix(`${indexKey}::`)).length === vectorCount;
+}
+
+export async function purgeRepositoryIndex(fullName: string, revision?: string | null) {
+  const key = repositoryIndexKey(fullName, revision);
+  await deleteIds(await listIdsWithPrefix(`${key}::`));
+  if (revision) return;
 
   // Legacy ids share a prefix with sibling repositories, so ownership is checked via metadata.
-  const legacy = await listIdsWithPrefix(`${repoId}-`);
+  const legacy = await listIdsWithPrefix(`${fullName}-`);
   const owned: string[] = [];
 
   for (let i = 0; i < legacy.length; i += 100) {
     const batch = legacy.slice(i, i + 100);
     const fetched = await fetchPineconeDocuments(batch);
     for (const id of batch) {
-      if (fetched.documents[id]?.repoId === repoId) owned.push(id);
+      if (fetched.documents[id]?.repoId === fullName) owned.push(id);
     }
   }
 
   await deleteIds(owned);
-  return stale.length + owned.length;
 }
 
-export async function indexCodebase(
+export async function purgeRepositoryVectors(fullName: string) {
+  await purgeRepositoryIndex(fullName);
+  await deleteIds(await listIdsWithPrefix(`${fullName}@`));
+}
+
+export async function indexCodebaseBatch(
   repoId: string,
   files: { path: string; content: string }[]
 ) {
-  const pending: PendingVector[] = [];
+  const pending = new Map<string, PendingVector>();
   const indexable = files.filter((file) => isIndexablePath(file.path));
 
   let cursor = 0;
@@ -194,8 +205,9 @@ export async function indexCodebase(
       const chunks = splitFileIntoChunks(file.content);
       chunks.forEach((chunk, index) => {
         const text = `File: ${file.path} (chunk ${index + 1})\n\n${chunk}`;
-        pending.push({
-          id: vectorId(repoId, file.path, `__file_chunk__${index + 1}`),
+        const id = vectorId(repoId, file.path, `__file_chunk__${index + 1}`);
+        pending.set(id, {
+          id,
           text,
           metadata: {
             repoId,
@@ -211,8 +223,9 @@ export async function indexCodebase(
       }
 
       for (const symbol of symbols) {
-        pending.push({
-          id: vectorId(repoId, file.path, `${symbol.name}@${symbol.startLine}`),
+        const id = vectorId(repoId, file.path, `${symbol.name}@${symbol.startLine}`);
+        pending.set(id, {
+          id,
           text: `${file.path}\n${symbol.code}`.slice(0, MAX_SYMBOL_CHARS),
           metadata: {
             repoId,
@@ -231,43 +244,30 @@ export async function indexCodebase(
 
   await Promise.all(Array.from({ length: PARSE_CONCURRENCY }, worker));
 
-  const vectors: { id: string; values: number[]; metadata: CodeMetadata }[] = [];
-
-  for (let i = 0; i < pending.length; i += EMBED_BATCH_SIZE) {
-    const batch = pending.slice(i, i + EMBED_BATCH_SIZE);
-
-    try {
-      const embeddings = await generateEmbeddings(batch.map((item) => item.text));
-      batch.forEach(({ id, metadata }, index) => {
-        vectors.push({ id, values: embeddings[index], metadata });
-      });
-    } catch (error) {
-      console.error(`Failed to embed batch starting at ${i} for ${repoId}:`, error);
-      throw error;
+  const entries = Array.from(pending.values());
+  let embeddingMs = 0;
+  let upsertMs = 0;
+  for (let i = 0; i < entries.length; i += EMBED_BATCH_SIZE) {
+    const batch = entries.slice(i, i + EMBED_BATCH_SIZE);
+    const embeddingStarted = performance.now();
+    const embeddings = await generateEmbeddings(batch.map((item) => item.text), 0);
+    embeddingMs += performance.now() - embeddingStarted;
+    const vectors = batch.map(({ id, metadata }, index) => ({ id, values: embeddings[index], metadata }));
+    for (let j = 0; j < vectors.length; j += UPSERT_BATCH_SIZE) {
+      const upsertStarted = performance.now();
+      await upsertPineconeDocuments(vectors.slice(j, j + UPSERT_BATCH_SIZE));
+      upsertMs += performance.now() - upsertStarted;
     }
   }
 
-  if (vectors.length === 0) {
-    console.log(`No vectors generated for repository ${repoId}`);
-    await purgeRepositoryVectors(repoId);
-    return { indexed: 0 };
-  }
+  console.info("[repository-index-batch]", {
+    files: indexable.length,
+    vectors: entries.length,
+    embeddingMs: Math.round(embeddingMs),
+    upsertMs: Math.round(upsertMs),
+  });
 
-  for (let i = 0; i < vectors.length; i += UPSERT_BATCH_SIZE) {
-    const batch = vectors.slice(i, i + UPSERT_BATCH_SIZE);
-    try {
-      await upsertPineconeDocuments(batch);
-      console.log(`Upserted batch of ${batch.length} vectors to Pinecone for ${repoId}`);
-    } catch (error) {
-      console.error(`Failed to upsert batch to Pinecone:`, error);
-      throw error;
-    }
-  }
-
-  // Keep the last complete index intact until every new vector has been embedded and upserted.
-  await purgeRepositoryVectors(repoId, new Set(vectors.map((vector) => vector.id)));
-
-  return { indexed: vectors.length };
+  return { indexed: entries.length };
 }
 
 export async function retrieveContext(
@@ -275,9 +275,15 @@ export async function retrieveContext(
   repoId: string,
   topK: number = 10
 ) {
-  const embedding = await generateEmbedding(query);
-
-  const results = await searchPineconeDocuments(embedding, repoId, topK);
+  const [embedding, repository] = await Promise.all([
+    generateEmbedding(query),
+    prisma.repository.findFirst({
+      where: { fullName: { equals: repoId, mode: "insensitive" } },
+      select: { fullName: true, indexRevision: true },
+    }),
+  ]);
+  const indexKey = repositoryIndexKey(repository?.fullName ?? repoId, repository?.indexRevision);
+  const results = await searchPineconeDocuments(embedding, indexKey, topK);
 
   return results.matches
     .map(stripSearchFields)

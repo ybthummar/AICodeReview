@@ -4,6 +4,7 @@ import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import AppSidebar, { DashboardHeader } from "@/components/app-sidebar";
 import { isAdminUser } from "@/lib/admin";
 import { requireAuth } from "@/module/utils/auth-utils";
+import RepositoryIndexNotifications from "@/module/repository/components/repository-index-notifications";
 
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
   const [{ user }, cookieStore] = await Promise.all([requireAuth(), cookies()]);
@@ -13,6 +14,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
       <a href="#dashboard-content" className="sr-only z-50 rounded-md bg-white p-2 focus:not-sr-only focus:fixed focus:top-2 focus:left-2">
         Skip to content
       </a>
+      <RepositoryIndexNotifications />
       <AppSidebar user={{ name: user.name, email: user.email, image: user.image }} isAdmin={isAdminUser(user)} />
       <SidebarInset className="min-w-0 bg-slate-50/80">
         <DashboardHeader />

@@ -12,7 +12,7 @@ import {
   verifyRepositoryAccess,
 } from "@/module/github/lib/github";
 import { hasInstallationForAccount } from "@/module/github/lib/app";
-import { queueRepositoryIndex } from "@/inngest/functions";
+import { queueRepositoryIndex } from "@/module/repository/lib/index-jobs";
 import { recordAudit } from "@/module/audit/lib/audit";
 import { revalidatePath } from "next/cache";
 
@@ -117,7 +117,7 @@ export const connectRepository = async (
     }
 
     // The repository is saved even when the webhook is not possible (for example on localhost).
-    await prisma.repository.upsert({
+    const connectedRepository = await prisma.repository.upsert({
       where: {
         githubId: BigInt(githubId),
       },
@@ -135,16 +135,17 @@ export const connectRepository = async (
         url: `https://github.com/${canonical.owner}/${canonical.name}`,
         userId: session.user.id,
       },
+      select: { id: true },
     });
 
     let indexingQueued = false;
     try {
-      await queueRepositoryIndex({
+      indexingQueued = await queueRepositoryIndex({
+        id: connectedRepository.id,
         owner: canonical.owner,
-        repo: canonical.name,
+        name: canonical.name,
         userId: session.user.id,
       });
-      indexingQueued = true;
     } catch (error) {
       console.error(`Failed to queue indexing for ${canonical.owner}/${canonical.name}:`, error);
     }

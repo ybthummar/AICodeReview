@@ -25,18 +25,19 @@ export const useConnectRepository = () => {
         return;
       }
 
-      const warnings: string[] = [];
+      const notices: string[] = [
+        result.data.indexingQueued
+          ? "indexing has started and you'll be notified when it is ready"
+          : "indexing could not be queued; use Re-index from the codebase chat",
+      ];
       if (result.data.webhook === "failed") {
-        warnings.push("the GitHub webhook could not be registered");
-      }
-      if (!result.data.indexingQueued) {
-        warnings.push("indexing could not be queued; use Re-index from the codebase chat");
+        notices.push("the GitHub webhook could not be registered");
       }
 
-      if (warnings.length > 0) {
-        toast.warning(`Repository connected, but ${warnings.join(" and ")}.`);
+      if (result.data.webhook === "failed" || !result.data.indexingQueued) {
+        toast.warning(`Repository connected; ${notices.join(". ")}.`);
       } else {
-        toast.success("Repository connected successfully");
+        toast.success(`Repository connected; ${notices[0]}.`);
       }
 
       queryClient.invalidateQueries({ queryKey: ["repositories"] });

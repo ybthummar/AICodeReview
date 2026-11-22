@@ -15,6 +15,7 @@ import {
   viewerMembershipInclude,
   type WorkspaceRole,
 } from "@/module/team/lib/access";
+import { repositoryIndexStatus } from "@/module/repository/lib/index-status";
 
 const MAX_OWNED_WORKSPACES = 3;
 const FREE_MAX_MEMBERS = 3;
@@ -55,6 +56,11 @@ export interface AccessibleRepositoryView {
   owner: string;
   name: string;
   role: WorkspaceRole;
+  indexJobId: string | null;
+  indexStatus: ReturnType<typeof repositoryIndexStatus>;
+  indexFilesDone: number;
+  indexFilesTotal: number | null;
+  indexUpdatedAt: string | null;
 }
 
 async function requireSession() {
@@ -162,6 +168,11 @@ export async function getAccessibleRepositories(
       owner: repository.owner,
       name: repository.name,
       role: roleForRepository(repository, session.user),
+      indexJobId: repository.indexJobId,
+      indexStatus: repositoryIndexStatus(repository.indexStatus, repository.indexUpdatedAt),
+      indexFilesDone: repository.indexFilesDone,
+      indexFilesTotal: repository.indexFilesTotal,
+      indexUpdatedAt: repository.indexUpdatedAt?.toISOString() ?? null,
     }))
     .filter((repository) => hasRole(repository.role, minimumRole));
 }

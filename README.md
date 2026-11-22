@@ -135,15 +135,18 @@ npm run dev
 
 Open `http://localhost:3000`.
 
+For local repository indexing, run `npx inngest-cli@latest dev` in a second terminal and keep it running alongside Next.js. The Inngest Dev Server listens on port 8288; local jobs now target it by default rather than silently sending development events to Inngest Cloud.
+
 ## Running background workers & handling webhooks
 
-- Background functions live under `inngest/functions/` — use Inngest's local runner or deploy the worker as a serverless function according to Inngest docs.
+- Background functions live under `inngest/functions/`. Use `npx inngest-cli@latest dev` locally, or deploy and sync the worker with Inngest Cloud for production.
 - For local webhook testing (Razorpay / GitHub), use a tunneling tool (e.g., `ngrok`) and configure provider dashboard webhook URLs and secrets to match your `app/api/*` webhook endpoints.
 
 ## Development commands (common)
 
 ```bash
 npm run dev        # start Next.js dev server
+npx inngest-cli@latest dev # start local Inngest worker
 npm run build      # build for production
 npm run start      # run production server
 npx prisma generate
@@ -163,7 +166,7 @@ Check `package.json` for exact script names used in this repo.
 
 - App: Vercel is recommended for seamless Next.js deployments. Set environment variables in the Vercel project settings.
 - Authentication uses Neon Managed Auth for Google and email/password, and Better Auth for GitHub. Set the Managed Auth URL and cookie secret in Vercel, and register `<production-app-url>/api/auth/callback/github` with the production GitHub OAuth app.
-- Repository indexing: configure and serve the Inngest endpoint at `/api/inngest`, with `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` set in the app environment. Connect and Re-index queue durable Inngest jobs; they do not run as detached Next.js requests. Indexing embeds file chunks and symbols, upserts the new vectors before removing stale ones, and fails visibly rather than replacing an index after incomplete GitHub fetches or failed embedding/Pinecone writes. Indexing is capped at 400 eligible files per repository.
+- Repository indexing: configure and serve the Inngest endpoint at `/api/inngest`, with `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` set in the app environment. Connecting a repository starts indexing automatically; Re-index queues the same durable Inngest job. The dashboard shows file progress, notifies users when indexing finishes, and enables codebase questions once the index is ready. Indexing embeds file chunks and symbols, upserts the new vectors before removing stale ones, and fails visibly rather than replacing an index after incomplete GitHub fetches or failed embedding/Pinecone writes. Large repositories take longer because each eligible file must be fetched and embedded; indexing is capped at 400 files per repository.
 - Prisma migrations: use `npx prisma migrate deploy` in your deployment pipeline.
 - Background jobs: deploy Inngest workers or use Inngest serverless configuration.
 - Webhooks: configure production webhook endpoints and verify signatures using secrets stored in environment variables.

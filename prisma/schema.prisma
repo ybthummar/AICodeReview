@@ -63,6 +63,13 @@ model Repository {
   user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
+  indexJobId        String?
+  indexStatus       String?
+  indexUpdatedAt    DateTime?
+  indexFilesDone    Int                @default(0)
+  indexFilesTotal   Int?
+  indexRevision     String?
+  indexVectorCount  Int?
   reviews           Review[]
   repositoryClients RepositoryClient[]
   settings          RepositorySettings?

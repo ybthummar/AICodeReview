@@ -220,93 +220,124 @@ export const deleteWebhook = async (owner: string, repo: string) => {
 
 const BLOB_FETCH_CONCURRENCY = 8;
 
-// One tree request plus concurrent blob reads instead of a request per directory and file.
-export const getRepoFileContent = async (
+export interface RepositoryIndexFile {
+  path: string;
+  sha: string;
+}
+
+export async function getRepositoryIndexFiles(
   token: string,
   owner: string,
-  repo: string,
-  path: string = ""
-): Promise<{ path: string; content: string }[]> => {
+  repo: string
+): Promise<RepositoryIndexFile[]> {
   const octokit = new Octokit({ auth: token });
-
-  const { data: repository } = await octokit.rest.repos.get({ owner, repo });
-  const { data: tree } = await octokit.rest.git.getTree({
+  const { data: repository } = await octokit.rest.repos.get({
+    owner, repo, request: { signal: AbortSignal.timeout(15_000) },
+  });
+  const result = await octokit.rest.git.getTree({
     owner,
     repo,
     tree_sha: repository.default_branch,
     recursive: "true",
+    request: { signal: AbortSignal.timeout(20_000) },
+  }).catch((error: unknown) => {
+    if (error instanceof Error && "status" in error && error.status === 409 && /repository is empty/i.test(error.message)) {
+      return null;
+    }
+    throw error;
   });
 
-  if (tree.truncated) {
-    throw new Error(
-      `GitHub returned an incomplete file tree for ${owner}/${repo}; refusing to replace its code index.`
-    );
+  if (!result) return [];
+  if (result.data.truncated) {
+    throw new Error(`GitHub returned an incomplete file tree for ${owner}/${repo}.`);
   }
 
-  const prefix = path ? `${path.replace(/\/$/, "")}/` : "";
+  const candidates = result.data.tree
+    .flatMap(({ type, mode, path, sha, size }) => (
+      type === "blob" && mode !== "120000" && path && sha &&
+      (size ?? 0) <= MAX_INDEXED_FILE_BYTES && isIndexablePath(path) ? [{ path, sha }] : []
+    ))
+    .sort((a, b) => a.path.localeCompare(b.path));
 
-  const allCandidates = tree.tree
-    .filter(
-      (item) =>
-        item.type === "blob" &&
-        item.path &&
-        item.sha &&
-        (!prefix || item.path.startsWith(prefix)) &&
-        (item.size ?? 0) <= MAX_INDEXED_FILE_BYTES &&
-        isIndexablePath(item.path)
-    )
-    .sort((a, b) => (a.path ?? "").localeCompare(b.path ?? ""));
-  const candidates = allCandidates.slice(0, MAX_INDEXED_FILES);
-
-  if (allCandidates.length > MAX_INDEXED_FILES) {
-    console.warn(
-      `Indexing ${MAX_INDEXED_FILES} of ${allCandidates.length} eligible files in ${owner}/${repo}; the configured file limit was reached.`
-    );
+  if (candidates.length > MAX_INDEXED_FILES) {
+    console.warn(`Indexing ${MAX_INDEXED_FILES} of ${candidates.length} eligible files in ${owner}/${repo}.`);
   }
 
-  const files: { path: string; content: string }[] = [];
-  const failedPaths: string[] = [];
-  let cursor = 0;
+  return candidates.slice(0, MAX_INDEXED_FILES);
+}
 
-  const worker = async () => {
-    while (cursor < candidates.length) {
-      const item = candidates[cursor++];
+interface IndexBlob {
+  isBinary: boolean;
+  isTruncated: boolean;
+  text: string | null;
+}
 
-      try {
-        const { data: blob } = await octokit.rest.git.getBlob({
-          owner,
-          repo,
-          file_sha: item.sha as string,
-        });
+export async function getRepositoryIndexFileContents(
+  token: string,
+  owner: string,
+  repo: string,
+  files: RepositoryIndexFile[]
+) {
+  if (!files.length) return [];
+  const octokit = new Octokit({ auth: token });
+  const shas = Array.from(new Set(files.map((file) => file.sha)));
+  const variables = shas.map((_, i) => `$blob${i}: GitObjectID!`);
+  const selections = shas.map((_, i) => `blob${i}: object(oid: $blob${i}) { ... on Blob { isBinary isTruncated text } }`);
+  const blobs = await octokit.graphql<{ repository: Record<string, IndexBlob | null> | null }>(
+    `query($owner: String!, $repo: String!, ${variables.join(", ")}) {
+      repository(owner: $owner, name: $repo) { ${selections.join("\n")} }
+    }`,
+    {
+      owner,
+      repo,
+      ...Object.fromEntries(shas.map((sha, i) => [`blob${i}`, sha])),
+      request: { signal: AbortSignal.timeout(12_000) },
+    },
+  ).then((result) => result.repository).catch((error: unknown) => {
+    const status =
+      typeof error === "object" && error !== null && "status" in error && typeof error.status === "number"
+        ? error.status
+        : undefined;
+    const message = error instanceof Error ? error.message : "";
+    const graphQlAccessDenied = status === 401 || status === 403;
+    const rateLimited = /rate.?limit|secondary rate/i.test(message);
+    if (!graphQlAccessDenied || rateLimited) throw error;
 
-        if (blob.encoding !== "base64") {
-          throw new Error(`GitHub returned unsupported blob encoding for ${item.path}`);
-        }
+    console.warn("[repository-index] GitHub GraphQL blob read failed; using REST fallback", {
+      owner,
+      repo,
+      blobs: shas.length,
+      status,
+    });
+    return null;
+  });
 
-        files.push({
-          path: item.path as string,
-          content: Buffer.from(blob.content, "base64").toString("utf-8"),
-        });
-      } catch (err) {
-        console.warn(
-          `Failed to fetch file content for ${item.path}:`,
-          err instanceof Error ? err.message : "unknown error"
-        );
-        failedPaths.push(item.path as string);
-      }
-    }
-  };
-
-  await Promise.all(Array.from({ length: BLOB_FETCH_CONCURRENCY }, worker));
-
-  if (failedPaths.length > 0) {
-    throw new Error(
-      `Could not fetch ${failedPaths.length} file${failedPaths.length === 1 ? "" : "s"} from ${owner}/${repo}; refusing to replace its code index.`
-    );
+  const contents = new Map<string, string>();
+  const missing: string[] = [];
+  for (const [i, sha] of shas.entries()) {
+    const blob = blobs?.[`blob${i}`];
+    if (blob?.isBinary) continue;
+    if (blob && !blob.isTruncated && typeof blob.text === "string") contents.set(sha, blob.text);
+    else missing.push(sha);
   }
 
-  return files.sort((a, b) => a.path.localeCompare(b.path));
-};
+  // Some GitHub tokens cannot use GraphQL, and large blobs may be truncated.
+  for (let i = 0; i < missing.length; i += BLOB_FETCH_CONCURRENCY) {
+    await Promise.all(missing.slice(i, i + BLOB_FETCH_CONCURRENCY).map(async (sha) => {
+      const { data } = await octokit.rest.git.getBlob({
+        owner, repo, file_sha: sha, request: { signal: AbortSignal.timeout(15_000) },
+      });
+      if (data.encoding !== "base64") throw new Error("GitHub returned an unsupported blob encoding.");
+      const content = Buffer.from(data.content, "base64").toString("utf-8");
+      if (!content.includes("\0")) contents.set(sha, content);
+    }));
+  }
+
+  return files.flatMap(({ path, sha }) => {
+    const content = contents.get(sha);
+    return content === undefined ? [] : [{ path, content }];
+  });
+}
 
 export interface PullRequestDiffResult {
   diff: string;

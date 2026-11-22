@@ -10,7 +10,7 @@ import {
   type ChatMessage,
 } from "@/module/chat/lib/answer";
 import { findAccessibleRepository, requireRepositoryToken } from "@/module/team/lib/access";
-import { queueRepositoryIndex } from "@/inngest/functions";
+import { queueRepositoryIndex } from "@/module/repository/lib/index-jobs";
 
 const MAX_QUESTION_LENGTH = 1000;
 
@@ -86,8 +86,9 @@ export async function reindexRepository(repositoryId: string): Promise<ActionRes
     if (!access) return fail(new Error("Only the person who connected the repository can re-index it."));
 
     await queueRepositoryIndex({
+      id: access.repository.id,
       owner: access.repository.owner,
-      repo: access.repository.name,
+      name: access.repository.name,
       userId: access.repository.userId,
     });
 
