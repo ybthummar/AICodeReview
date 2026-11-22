@@ -9,6 +9,13 @@ export class NeonAuthConfigurationError extends Error {
 
 let authInstance: ReturnType<typeof createNeonAuth> | undefined;
 
+export function isNeonAuthConfigured() {
+  return Boolean(
+    process.env.NEON_AUTH_BASE_URL?.trim() &&
+    (process.env.NEON_AUTH_COOKIE_SECRET?.length ?? 0) >= 32
+  );
+}
+
 export function getNeonAuth() {
   const baseUrl = process.env.NEON_AUTH_BASE_URL?.trim();
   const cookieSecret = process.env.NEON_AUTH_COOKIE_SECRET;

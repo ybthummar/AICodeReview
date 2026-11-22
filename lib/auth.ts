@@ -63,6 +63,10 @@ export const legacyAuth = betterAuth({
 });
 
 async function getSession(options: Parameters<typeof legacyAuth.api.getSession>[0]) {
+  // Resolve the local GitHub session before contacting the managed email provider.
+  const legacySession = await legacyAuth.api.getSession(options);
+  if (legacySession) return { ...legacySession, authProvider: "legacy" as const };
+
   if (process.env.NEON_AUTH_BASE_URL?.trim()) {
     const { data: session, error } = await getNeonAuth().getSession();
     if (error) throw error;
@@ -73,7 +77,7 @@ async function getSession(options: Parameters<typeof legacyAuth.api.getSession>[
         select: { id: true, subscriptionTier: true },
       });
 
-      if (!appUser) {
+      if (!appUser && session.user.emailVerified) {
         appUser = await prisma.user.findUnique({
           where: { email: session.user.email },
           select: { id: true, subscriptionTier: true },
@@ -94,10 +98,13 @@ async function getSession(options: Parameters<typeof legacyAuth.api.getSession>[
         appUser = await prisma.user.findUnique({
           where: { id: session.user.id },
           select: { id: true, subscriptionTier: true },
-        }) ?? await prisma.user.findUnique({
-          where: { email: session.user.email },
-          select: { id: true, subscriptionTier: true },
         });
+        if (!appUser && session.user.emailVerified) {
+          appUser = await prisma.user.findUnique({
+            where: { email: session.user.email },
+            select: { id: true, subscriptionTier: true },
+          });
+        }
       }
 
       if (!appUser) {
@@ -116,8 +123,7 @@ async function getSession(options: Parameters<typeof legacyAuth.api.getSession>[
     }
   }
 
-  const legacySession = await legacyAuth.api.getSession(options);
-  return legacySession ? { ...legacySession, authProvider: "legacy" as const } : null;
+  return null;
 }
 
 export const auth = { api: { getSession } };

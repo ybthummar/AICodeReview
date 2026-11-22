@@ -24,6 +24,7 @@ export const neonGetSession = neonAuthClient.getSession;
 
 export type AppSession = {
   provider: "neon" | "legacy";
+  emailAuthEnabled: boolean;
   user: {
     id: string;
     name: string;
@@ -37,11 +38,12 @@ type SignOutOptions = Parameters<typeof legacyAuthClient.signOut>[0];
 
 export async function signOut(
   options?: SignOutOptions,
-  provider?: AppSession["provider"],
+  session?: AppSession | null,
 ) {
+  const activeSession = session ?? await getAppSession();
   let neonError: unknown;
 
-  if (provider !== "legacy") {
+  if (activeSession?.emailAuthEnabled || activeSession?.provider === "neon") {
     try {
       const neonResult = await neonAuthClient.signOut();
       if (neonResult.error) neonError = neonResult.error;
@@ -57,15 +59,17 @@ export async function signOut(
   return legacyResult;
 }
 
+async function getAppSession(): Promise<AppSession | null> {
+  const response = await fetch("/api/app-session", { cache: "no-store" });
+  if (!response.ok) throw new Error("Could not retrieve the current user.");
+  return await response.json() as AppSession | null;
+}
+
 export function useSession() {
   const query = useQuery({
     queryKey: ["app-session"],
     retry: false,
-    queryFn: async (): Promise<AppSession | null> => {
-      const response = await fetch("/api/app-session", { cache: "no-store" });
-      if (!response.ok) throw new Error("Could not retrieve the current user.");
-      return await response.json() as AppSession | null;
-    },
+    queryFn: getAppSession,
   });
 
   return { ...query, data: query.data ?? null };

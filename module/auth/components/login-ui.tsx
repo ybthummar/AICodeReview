@@ -1,14 +1,15 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { ArrowRight, Github, LockKeyhole, Mail, Rat, ShieldCheck, UserRound, GitPullRequest, Sparkles } from "lucide-react";
+import { Eye, EyeOff, Github, LockKeyhole, Mail, Rat, ShieldCheck, UserRound, GitPullRequest, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { neonGetSession, neonSignIn, neonSignUp, signIn } from "@/lib/auth-client";
 import { signInCode, signInMessage, type GitHubSignInCode } from "@/module/auth/lib/github-sign-in";
 
-export default function LoginPage({ authOrigin, initialError }: {
+export default function LoginPage({ authOrigin, initialError, emailAuthEnabled }: {
   authOrigin: string;
   initialError: GitHubSignInCode | null;
+  emailAuthEnabled: boolean;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -16,7 +17,9 @@ export default function LoginPage({ authOrigin, initialError }: {
   const [emailMode, setEmailMode] = useState<"signIn" | "signUp">("signIn");
   const [emailLoading, setEmailLoading] = useState(false);
   const [emailError, setEmailError] = useState<string | null>(null);
-  const [currentUser, setCurrentUser] = useState<{ name: string; email: string } | null>(null);
+  const [emailNotice, setEmailNotice] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+  const pending = loading || emailLoading;
 
   const handleGithubSignIn = async () => {
     if (window.location.origin !== authOrigin) {
@@ -44,7 +47,7 @@ export default function LoginPage({ authOrigin, initialError }: {
   const handleEmailSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setEmailError(null);
-    setCurrentUser(null);
+    setEmailNotice(null);
     setEmailLoading(true);
 
     const formData = new FormData(event.currentTarget);
@@ -71,16 +74,16 @@ export default function LoginPage({ authOrigin, initialError }: {
         return;
       }
       if (!session.data?.user) {
-        setEmailError(
-          "The account was created, but no session is active. Check whether email verification is required, then sign in.",
-        );
+        if (emailMode === "signUp") {
+          setEmailNotice("Check your inbox to verify your email, then sign in.");
+        } else {
+          setEmailError("Your session could not be restored. Please sign in again.");
+        }
         return;
       }
 
-      setCurrentUser({
-        name: session.data.user.name,
-        email: session.data.user.email,
-      });
+      router.replace("/dashboard");
+      router.refresh();
     } catch (error) {
       setEmailError(error instanceof Error ? error.message : "Email sign-in failed. Please try again.");
     } finally {
@@ -110,9 +113,11 @@ export default function LoginPage({ authOrigin, initialError }: {
           </div>
 
           <div className="mb-6 text-center animate-fade-in-delay">
-            <h2 className="text-xl font-semibold text-gray-900">Welcome back</h2>
+            <h2 className="text-xl font-semibold text-gray-900">
+              {emailAuthEnabled && emailMode === "signUp" ? "Create your account" : "Welcome back"}
+            </h2>
             <p className="mt-1 text-sm text-gray-500">
-              Continue with GitHub or use your email and password.
+              {emailAuthEnabled ? "Continue with GitHub or use your email and password." : "Sign in with GitHub to connect your repositories."}
             </p>
           </div>
 
@@ -120,9 +125,10 @@ export default function LoginPage({ authOrigin, initialError }: {
           <button
             type="button"
             onClick={handleGithubSignIn}
-            disabled={loading}
+            disabled={pending}
+            aria-busy={loading}
             className={`w-full py-3 px-4 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center justify-center cursor-pointer shadow-sm hover:-translate-y-0.5 ${
-              loading
+              pending
                 ? "bg-gray-100 text-gray-400 cursor-not-allowed"
                 : "bg-gray-900 text-white hover:bg-gray-800 hover:shadow-lg active:translate-y-0 focus:outline-none focus:ring-4 focus:ring-gray-200"
             }`}
@@ -146,106 +152,114 @@ export default function LoginPage({ authOrigin, initialError }: {
             </div>
           )}
 
-          <div className="my-5 flex items-center gap-3 text-xs text-gray-400">
-            <span className="h-px flex-1 bg-gray-200" />
-            OR CONTINUE WITH EMAIL
-            <span className="h-px flex-1 bg-gray-200" />
-          </div>
+          {emailAuthEnabled && (
+            <>
+              <div className="my-5 flex items-center gap-3 text-xs text-gray-400">
+                <span className="h-px flex-1 bg-gray-200" />
+                OR CONTINUE WITH EMAIL
+                <span className="h-px flex-1 bg-gray-200" />
+              </div>
 
-          <form onSubmit={handleEmailSubmit} className="space-y-3">
-            {emailMode === "signUp" && (
-              <label className="block">
-                <span className="mb-1 block text-sm font-medium text-gray-700">Name</span>
-                <span className="relative block">
-                  <UserRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                  <input
-                    name="name"
-                    type="text"
-                    autoComplete="name"
-                    required
-                    maxLength={100}
-                    className="w-full rounded-xl border border-gray-200 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                    placeholder="Your name"
-                  />
-                </span>
-              </label>
-            )}
-            <label className="block">
-              <span className="mb-1 block text-sm font-medium text-gray-700">Email</span>
-              <span className="relative block">
-                <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                <input
-                  name="email"
-                  type="email"
-                  autoComplete="email"
-                  required
-                  className="w-full rounded-xl border border-gray-200 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                  placeholder="you@example.com"
-                />
-              </span>
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-sm font-medium text-gray-700">Password</span>
-              <span className="relative block">
-                <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                <input
-                  name="password"
-                  type="password"
-                  autoComplete={emailMode === "signUp" ? "new-password" : "current-password"}
-                  required
-                  minLength={8}
-                  className="w-full rounded-xl border border-gray-200 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                  placeholder="At least 8 characters"
-                />
-              </span>
-            </label>
+              <form onSubmit={handleEmailSubmit} aria-busy={emailLoading}>
+                <fieldset disabled={pending} className="space-y-3">
+                  {emailMode === "signUp" && (
+                    <label className="block">
+                      <span className="mb-1 block text-sm font-medium text-gray-700">Name</span>
+                      <span className="relative block">
+                        <UserRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                        <input
+                          name="name"
+                          type="text"
+                          autoComplete="name"
+                          required
+                          maxLength={100}
+                          className="w-full rounded-xl border border-gray-200 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                          placeholder="Your name"
+                        />
+                      </span>
+                    </label>
+                  )}
+                  <label className="block">
+                    <span className="mb-1 block text-sm font-medium text-gray-700">Email</span>
+                    <span className="relative block">
+                      <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                      <input
+                        name="email"
+                        type="email"
+                        autoComplete="email"
+                        required
+                        className="w-full rounded-xl border border-gray-200 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                        placeholder="you@example.com"
+                      />
+                    </span>
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-sm font-medium text-gray-700">Password</span>
+                    <span className="relative block">
+                      <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                      <input
+                        name="password"
+                        type={showPassword ? "text" : "password"}
+                        autoComplete={emailMode === "signUp" ? "new-password" : "current-password"}
+                        required
+                        minLength={8}
+                        className="w-full rounded-xl border border-gray-200 py-2.5 pl-10 pr-11 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                        placeholder="At least 8 characters"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        aria-label={showPassword ? "Hide password" : "Show password"}
+                        aria-pressed={showPassword}
+                        className="absolute right-1 top-1/2 -translate-y-1/2 rounded-md p-2 text-gray-500 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-blue-600"
+                      >
+                        {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                      </button>
+                    </span>
+                  </label>
 
-            {emailError && (
-              <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-                {emailError}
-              </p>
-            )}
+                  {emailError && (
+                    <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                      {emailError}
+                    </p>
+                  )}
 
-            {currentUser && (
-              <div role="status" className="space-y-3 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-900">
-                <p>
-                  Signed in as <strong>{currentUser.name}</strong> ({currentUser.email})
-                </p>
+                  {emailNotice && (
+                    <p role="status" className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+                      {emailNotice}
+                    </p>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={pending}
+                    className="w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {emailLoading
+                      ? (emailMode === "signUp" ? "Creating account..." : "Signing in...")
+                      : (emailMode === "signUp" ? "Create account" : "Sign in with email")}
+                  </button>
+                </fieldset>
+              </form>
+
+              <p className="mt-3 text-center text-sm text-gray-600">
+                {emailMode === "signUp" ? "Already have an account?" : "New to RepoPilot?"}{" "}
                 <button
                   type="button"
-                  onClick={() => router.push("/dashboard")}
-                  className="inline-flex items-center gap-1 font-semibold text-green-800 hover:underline"
+                  disabled={pending}
+                  onClick={() => {
+                    setEmailMode(emailMode === "signUp" ? "signIn" : "signUp");
+                    setEmailError(null);
+                    setEmailNotice(null);
+                    setShowPassword(false);
+                  }}
+                  className="font-semibold text-blue-700 hover:underline"
                 >
-                  Continue to RepoPilot <ArrowRight className="h-4 w-4" />
+                  {emailMode === "signUp" ? "Sign in" : "Create an account"}
                 </button>
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={emailLoading}
-              className="w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {emailLoading
-                ? (emailMode === "signUp" ? "Creating account..." : "Signing in...")
-                : (emailMode === "signUp" ? "Create account" : "Sign in with email")}
-            </button>
-          </form>
-
-          <p className="mt-3 text-center text-sm text-gray-600">
-            {emailMode === "signUp" ? "Already have an account?" : "New to RepoPilot?"}{" "}
-            <button
-              type="button"
-              onClick={() => {
-                setEmailMode(emailMode === "signUp" ? "signIn" : "signUp");
-                setEmailError(null);
-                setCurrentUser(null);
-              }}
-              className="font-semibold text-blue-700 hover:underline"
-            >
-              {emailMode === "signUp" ? "Sign in" : "Create an account"}
-            </button>
-          </p>
+              </p>
+            </>
+          )}
 
           <ul className="mt-6 space-y-2.5 text-sm text-gray-600">
             <li className="flex items-center gap-2.5">
@@ -262,16 +276,6 @@ export default function LoginPage({ authOrigin, initialError }: {
             </li>
           </ul>
 
-          {/* Footer */}
-          <p className="mt-8 text-center text-xs text-gray-500">
-            By signing in, you agree to our{" "}
-            <a
-              href="#"
-              className="text-blue-600 hover:text-blue-700 transition-colors"
-            >
-              Terms of Service
-            </a>
-          </p>
         </div>
       </div>
 

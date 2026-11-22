@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { auth } from "@/lib/auth";
+import { isNeonAuthConfigured } from "@/lib/neon-auth";
 
 export async function GET() {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -10,6 +11,7 @@ export async function GET() {
   const user = session.user;
   return Response.json({
     provider: session.authProvider,
+    emailAuthEnabled: isNeonAuthConfigured(),
     user: {
       id: user.id,
       name: user.name,

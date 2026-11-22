@@ -117,7 +117,7 @@ export default function AppSidebar({
 
   async function logout() {
     try {
-      await signOut(undefined, session?.provider);
+      await signOut(undefined, session);
       setOpenMobile(false);
       router.replace("/login");
       router.refresh();

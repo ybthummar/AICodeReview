@@ -1,6 +1,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth, authOrigin } from "@/lib/auth";
+import { isNeonAuthConfigured } from "@/lib/neon-auth";
 import LoginUI from "@/module/auth/components/login-ui";
 import { signInCode, type GitHubSignInCode } from "@/module/auth/lib/github-sign-in";
 
@@ -16,5 +17,5 @@ export default async function LoginPage({ searchParams }: {
     return null;
   });
   if (session) redirect("/dashboard");
-  return <LoginUI authOrigin={authOrigin} initialError={error} />;
+  return <LoginUI authOrigin={authOrigin} initialError={error} emailAuthEnabled={isNeonAuthConfigured()} />;
 }

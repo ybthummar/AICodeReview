@@ -18,7 +18,7 @@ function Logout({ children, className }: LogoutProps) {
           router.push("/login");
         },
       },
-    }, session?.provider);
+    }, session);
   }
   return (
     <span className={className} onClick={() => handleOnClick()}>

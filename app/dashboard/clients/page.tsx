@@ -67,9 +67,8 @@ export default function ClientsPage() {
   >({});
   const [open, setOpen] = useState(false);
 
-  async function loadData() {
-    try {
-      const data = await getRepoClientMap();
+  function loadData() {
+    return getRepoClientMap().then((data) => {
       setRepos(data || []);
 
       // Initialize email statuses as 'idle' for all repos
@@ -78,10 +77,10 @@ export default function ClientsPage() {
         statuses[repo.id] = "idle";
       });
       setEmailStatuses(statuses);
-    } catch (error) {
+    }).catch((error) => {
       console.error("Error loading data:", error);
       toast.error("Failed to load repositories");
-    }
+    });
   }
 
   useEffect(() => {

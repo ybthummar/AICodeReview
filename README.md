@@ -89,6 +89,10 @@ If a Vercel environment pull created `.env.local`, Next.js reads it before `.env
 
 The login page proxies email/password requests through `/api/neon-auth` and reads the active user from `/api/app-session`; GitHub OAuth remains on `/api/auth`. To provision Managed Auth, run `neon login`, link the requested project/branch, then run `neon deploy`. Because this project has a root `.env`, Neon CLI pulls its Auth URL into `.env`; keep the local cookie secret in `.env.development.local`. The configured production branch stores sign-ups as production users.
 
+Add the production origin to Neon's trusted domains, for example `https://repo-pilot1.vercel.app`, with no trailing slash or page path. Test a request from that origin after saving. A rejected origin produces `INVALID_ORIGIN`. GitHub's OAuth app separately requires the app's `/api/auth/callback/github` URL.
+
+Successful email sign-in opens the dashboard automatically. Session checks resolve existing GitHub sessions first, and sign-out clears both configured providers. Linking a managed email identity to an existing application account requires a verified email address.
+
 The login page shows an error code and recovery guidance when GitHub sign-in fails. A `state_mismatch` means the callback could not be tied to the initiating browser. An `invalid_code` means the token exchange failed. GitHub's token endpoint can give a more specific reason in the server logs. Search for `[auth/github]` to see whether the request failed at sign-in or on the callback. When GitHub itself displays a callback warning, compare its registered callback with the configured origin plus `/api/auth/callback/github`. [GitHub OAuth token exchange errors](https://docs.github.com/en/apps/oauth-apps/maintaining-oauth-apps/troubleshooting-oauth-app-access-token-request-errors)
 
 For Docker Compose, run `docker compose --env-file .env.development up --build`; Compose uses the same local file for build-time configuration and container runtime values.
