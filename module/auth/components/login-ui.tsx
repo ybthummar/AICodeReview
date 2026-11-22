@@ -142,7 +142,9 @@ export default function LoginPage({ authOrigin, initialError, initialGoogleError
               {emailAuthEnabled && emailMode === "signUp" ? "Create your account" : "Welcome back"}
             </h2>
             <p className="mt-1 text-sm text-gray-500">
-              Use GitHub sign-in to connect and review your repositories.
+              {emailAuthEnabled
+                ? "Continue with GitHub, Google, or email."
+                : "Use GitHub sign-in to connect and review your repositories."}
             </p>
           </div>
 
@@ -177,20 +179,24 @@ export default function LoginPage({ authOrigin, initialError, initialGoogleError
             </div>
           )}
 
-          <button
-            type="button"
-            onClick={handleGoogleSignIn}
-            disabled={pending}
-            aria-busy={googleLoading}
-            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-800 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <span aria-hidden="true" className="text-base font-bold text-blue-600">G</span>
-            {googleLoading ? "Connecting to Google..." : "Continue with Google"}
-          </button>
-          {googleError && (
-            <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-              {googleError}
-            </p>
+          {emailAuthEnabled && (
+            <>
+              <button
+                type="button"
+                onClick={handleGoogleSignIn}
+                disabled={pending}
+                aria-busy={googleLoading}
+                className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-800 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <span aria-hidden="true" className="text-base font-bold text-blue-600">G</span>
+                {googleLoading ? "Connecting to Google..." : "Continue with Google"}
+              </button>
+              {googleError && (
+                <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                  {googleError}
+                </p>
+              )}
+            </>
           )}
 
           {emailAuthEnabled && (
