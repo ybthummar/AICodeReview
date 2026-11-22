@@ -44,7 +44,7 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { signOut } from "@/lib/auth-client";
+import { signOut, useSession } from "@/lib/auth-client";
 import { getSubscriptionStatus } from "@/module/dashboard/actions";
 
 const navigationGroups = [
@@ -105,6 +105,7 @@ export default function AppSidebar({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { data: session } = useSession();
   const { isMobile, setOpenMobile } = useSidebar();
   const { data: subscription } = useQuery({
     queryKey: ["sidebar-subscription"],
@@ -116,8 +117,7 @@ export default function AppSidebar({
 
   async function logout() {
     try {
-      const result = await signOut();
-      if (result.error) throw new Error(result.error.message);
+      await signOut(undefined, session?.provider);
       setOpenMobile(false);
       router.replace("/login");
       router.refresh();

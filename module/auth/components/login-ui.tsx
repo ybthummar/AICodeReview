@@ -1,16 +1,22 @@
 "use client";
 
-import { useState } from "react";
-import { Github, Rat, ShieldCheck, GitPullRequest, Sparkles } from "lucide-react";
-import { signIn } from "@/lib/auth-client";
+import { useState, type FormEvent } from "react";
+import { ArrowRight, Github, LockKeyhole, Mail, Rat, ShieldCheck, UserRound, GitPullRequest, Sparkles } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { neonGetSession, neonSignIn, neonSignUp, signIn } from "@/lib/auth-client";
 import { signInCode, signInMessage, type GitHubSignInCode } from "@/module/auth/lib/github-sign-in";
 
 export default function LoginPage({ authOrigin, initialError }: {
   authOrigin: string;
   initialError: GitHubSignInCode | null;
 }) {
+  const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [githubError, setGithubError] = useState(initialError);
+  const [emailMode, setEmailMode] = useState<"signIn" | "signUp">("signIn");
+  const [emailLoading, setEmailLoading] = useState(false);
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<{ name: string; email: string } | null>(null);
 
   const handleGithubSignIn = async () => {
     if (window.location.origin !== authOrigin) {
@@ -33,6 +39,53 @@ export default function LoginPage({ authOrigin, initialError }: {
       setGithubError("network_error");
     }
     setLoading(false);
+  };
+
+  const handleEmailSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setEmailError(null);
+    setCurrentUser(null);
+    setEmailLoading(true);
+
+    const formData = new FormData(event.currentTarget);
+    const email = String(formData.get("email") ?? "").trim();
+    const password = String(formData.get("password") ?? "");
+
+    try {
+      const result = emailMode === "signUp"
+        ? await neonSignUp.email({
+            name: String(formData.get("name") ?? "").trim(),
+            email,
+            password,
+          })
+        : await neonSignIn.email({ email, password });
+
+      if (result.error) {
+        setEmailError(result.error.message || "Email sign-in failed. Please try again.");
+        return;
+      }
+
+      const session = await neonGetSession();
+      if (session.error) {
+        setEmailError(session.error.message || "Could not read the signed-in user.");
+        return;
+      }
+      if (!session.data?.user) {
+        setEmailError(
+          "The account was created, but no session is active. Check whether email verification is required, then sign in.",
+        );
+        return;
+      }
+
+      setCurrentUser({
+        name: session.data.user.name,
+        email: session.data.user.email,
+      });
+    } catch (error) {
+      setEmailError(error instanceof Error ? error.message : "Email sign-in failed. Please try again.");
+    } finally {
+      setEmailLoading(false);
+    }
   };
 
   return (
@@ -59,7 +112,7 @@ export default function LoginPage({ authOrigin, initialError }: {
           <div className="mb-6 text-center animate-fade-in-delay">
             <h2 className="text-xl font-semibold text-gray-900">Welcome back</h2>
             <p className="mt-1 text-sm text-gray-500">
-              Sign in with your GitHub account to connect repositories and get AI reviews.
+              Continue with GitHub or use your email and password.
             </p>
           </div>
 
@@ -92,6 +145,107 @@ export default function LoginPage({ authOrigin, initialError }: {
               <p className="text-xs">Error code <code>{githubError}</code></p>
             </div>
           )}
+
+          <div className="my-5 flex items-center gap-3 text-xs text-gray-400">
+            <span className="h-px flex-1 bg-gray-200" />
+            OR CONTINUE WITH EMAIL
+            <span className="h-px flex-1 bg-gray-200" />
+          </div>
+
+          <form onSubmit={handleEmailSubmit} className="space-y-3">
+            {emailMode === "signUp" && (
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-gray-700">Name</span>
+                <span className="relative block">
+                  <UserRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                  <input
+                    name="name"
+                    type="text"
+                    autoComplete="name"
+                    required
+                    maxLength={100}
+                    className="w-full rounded-xl border border-gray-200 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                    placeholder="Your name"
+                  />
+                </span>
+              </label>
+            )}
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-gray-700">Email</span>
+              <span className="relative block">
+                <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                <input
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  className="w-full rounded-xl border border-gray-200 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                  placeholder="you@example.com"
+                />
+              </span>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-gray-700">Password</span>
+              <span className="relative block">
+                <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                <input
+                  name="password"
+                  type="password"
+                  autoComplete={emailMode === "signUp" ? "new-password" : "current-password"}
+                  required
+                  minLength={8}
+                  className="w-full rounded-xl border border-gray-200 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                  placeholder="At least 8 characters"
+                />
+              </span>
+            </label>
+
+            {emailError && (
+              <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                {emailError}
+              </p>
+            )}
+
+            {currentUser && (
+              <div role="status" className="space-y-3 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-900">
+                <p>
+                  Signed in as <strong>{currentUser.name}</strong> ({currentUser.email})
+                </p>
+                <button
+                  type="button"
+                  onClick={() => router.push("/dashboard")}
+                  className="inline-flex items-center gap-1 font-semibold text-green-800 hover:underline"
+                >
+                  Continue to RepoPilot <ArrowRight className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={emailLoading}
+              className="w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {emailLoading
+                ? (emailMode === "signUp" ? "Creating account..." : "Signing in...")
+                : (emailMode === "signUp" ? "Create account" : "Sign in with email")}
+            </button>
+          </form>
+
+          <p className="mt-3 text-center text-sm text-gray-600">
+            {emailMode === "signUp" ? "Already have an account?" : "New to RepoPilot?"}{" "}
+            <button
+              type="button"
+              onClick={() => {
+                setEmailMode(emailMode === "signUp" ? "signIn" : "signUp");
+                setEmailError(null);
+                setCurrentUser(null);
+              }}
+              className="font-semibold text-blue-700 hover:underline"
+            >
+              {emailMode === "signUp" ? "Sign in" : "Create an account"}
+            </button>
+          </p>
 
           <ul className="mt-6 space-y-2.5 text-sm text-gray-600">
             <li className="flex items-center gap-2.5">

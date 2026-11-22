@@ -1,4 +1,4 @@
-import { auth, authOrigin } from "@/lib/auth";
+import { authOrigin, legacyAuth } from "@/lib/auth";
 import { signInCode, signInMessage, type GitHubSignInCode, type SignInStage } from "@/module/auth/lib/github-sign-in";
 
 function databaseFailure(error: unknown): GitHubSignInCode | undefined {
@@ -31,10 +31,10 @@ async function handle(request: Request) {
   const path = new URL(request.url).pathname.replace(/\/$/, "");
   const stage = path === "/api/auth/sign-in/social" ? "sign-in"
     : path === "/api/auth/callback/github" ? "callback" : undefined;
-  if (!stage) return auth.handler(request);
+  if (!stage) return legacyAuth.handler(request);
 
   try {
-    const response = await auth.handler(request);
+    const response = await legacyAuth.handler(request);
     if (response.status >= 400) {
       const body = await response.json().catch(() => null);
       return failureResponse(stage, signInCode(body?.code, stage, response.status), response.status, response.headers);

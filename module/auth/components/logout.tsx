@@ -1,5 +1,5 @@
 "use client";
-import { signOut } from "@/lib/auth-client";
+import { signOut, useSession } from "@/lib/auth-client";
 import { useRouter } from "next/navigation";
 
 interface LogoutProps {
@@ -9,6 +9,7 @@ interface LogoutProps {
 
 function Logout({ children, className }: LogoutProps) {
   const router = useRouter();
+  const { data: session } = useSession();
 
   async function handleOnClick() {
     await signOut({
@@ -17,7 +18,7 @@ function Logout({ children, className }: LogoutProps) {
           router.push("/login");
         },
       },
-    });
+    }, session?.provider);
   }
   return (
     <span className={className} onClick={() => handleOnClick()}>

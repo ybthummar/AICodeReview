@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
+import { getNeonAuth } from "./neon-auth";
 import prisma from "./db";
 
 const configuredAppUrl =
@@ -24,7 +25,7 @@ const vercelOrigin = process.env.VERCEL_URL
   ? `https://${process.env.VERCEL_URL}`
   : undefined;
 
-export const auth = betterAuth({
+export const legacyAuth = betterAuth({
   baseURL: authOrigin,
   secret: authSecret,
   onAPIError: {
@@ -60,3 +61,63 @@ export const auth = betterAuth({
     "https://www.repopilot.team",
   ],
 });
+
+async function getSession(options: Parameters<typeof legacyAuth.api.getSession>[0]) {
+  if (process.env.NEON_AUTH_BASE_URL?.trim()) {
+    const { data: session, error } = await getNeonAuth().getSession();
+    if (error) throw error;
+
+    if (session?.user) {
+      let appUser = await prisma.user.findUnique({
+        where: { id: session.user.id },
+        select: { id: true, subscriptionTier: true },
+      });
+
+      if (!appUser) {
+        appUser = await prisma.user.findUnique({
+          where: { email: session.user.email },
+          select: { id: true, subscriptionTier: true },
+        });
+      }
+
+      if (!appUser) {
+        await prisma.user.createMany({
+          data: [{
+            id: session.user.id,
+            name: session.user.name || session.user.email,
+            email: session.user.email,
+            emailVerified: session.user.emailVerified,
+            image: session.user.image,
+          }],
+          skipDuplicates: true,
+        });
+        appUser = await prisma.user.findUnique({
+          where: { id: session.user.id },
+          select: { id: true, subscriptionTier: true },
+        }) ?? await prisma.user.findUnique({
+          where: { email: session.user.email },
+          select: { id: true, subscriptionTier: true },
+        });
+      }
+
+      if (!appUser) {
+        throw new Error("Could not synchronize the Managed Auth user with the application database.");
+      }
+
+      return {
+        ...session,
+        authProvider: "neon" as const,
+        user: {
+          ...session.user,
+          id: appUser.id,
+          subscriptionTier: appUser.subscriptionTier,
+        },
+      };
+    }
+  }
+
+  const legacySession = await legacyAuth.api.getSession(options);
+  return legacySession ? { ...legacySession, authProvider: "legacy" as const } : null;
+}
+
+export const auth = { api: { getSession } };

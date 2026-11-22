@@ -81,17 +81,19 @@ Copy-Item .env.example .env
 Copy-Item .env.development.example .env.development
 ```
 
-Put deployment values in Vercel's Environment Variables. For local work, fill in `.env.development` with a reachable PostgreSQL database and development/test credentials; it overrides `.env` while running `npm run dev`. Better Auth needs the database to start GitHub sign-in. Restart the dev server after changing env values. Do not use production credentials locally. Both files are ignored by Git.
+Put deployment values in Vercel's Environment Variables. For local work, fill in `.env.development` with a reachable PostgreSQL database and development/test credentials; it overrides `.env` while running `npm run dev`. GitHub sign-in uses the app's Better Auth database; email/password sign-up uses Neon Managed Auth. Restart the dev server after changing env values. Do not use production credentials locally. Both files are ignored by Git.
 
 The local GitHub OAuth callback defaults to `http://localhost:3000/api/auth/callback/github`. If port 3000 is occupied and Next.js starts on another port, set `BETTER_AUTH_URL`, `NEXT_PUBLIC_APP_URL`, and `NEXT_PUBLIC_APP_BASE_URL` to that exact local origin and update the development OAuth app callback to match. The configured auth URL is used when generating the callback.
 
-If a Vercel environment pull created `.env.local`, Next.js reads it before `.env.development`. Copy `.env.development` to `.env.development.local` and keep local URLs, database, OAuth credentials, and any other development-only values there so they override production values. Restart the dev server after changing env files.
+If a Vercel environment pull created `.env.local`, Next.js reads it before `.env.development`. Copy `.env.development` to `.env.development.local` and keep local URLs, database, OAuth credentials, and any other development-only values there so they override production values. `NEON_AUTH_COOKIE_SECRET` is an application secret and must be at least 32 characters; keep it in an ignored env file and set a separate value in Vercel. Restart the dev server after changing env files.
+
+The login page proxies email/password requests through `/api/neon-auth` and reads the active user from `/api/app-session`; GitHub OAuth remains on `/api/auth`. To provision Managed Auth, run `neon login`, link the requested project/branch, then run `neon deploy`. Because this project has a root `.env`, Neon CLI pulls its Auth URL into `.env`; keep the local cookie secret in `.env.development.local`. The configured production branch stores sign-ups as production users.
 
 The login page shows an error code and recovery guidance when GitHub sign-in fails. A `state_mismatch` means the callback could not be tied to the initiating browser. An `invalid_code` means the token exchange failed. GitHub's token endpoint can give a more specific reason in the server logs. Search for `[auth/github]` to see whether the request failed at sign-in or on the callback. When GitHub itself displays a callback warning, compare its registered callback with the configured origin plus `/api/auth/callback/github`. [GitHub OAuth token exchange errors](https://docs.github.com/en/apps/oauth-apps/maintaining-oauth-apps/troubleshooting-oauth-app-access-token-request-errors)
 
 For Docker Compose, run `docker compose --env-file .env.development up --build`; Compose uses the same local file for build-time configuration and container runtime values.
 
-Use `.env.example` as the single Vercel Environment Variables checklist. Set secrets in Vercel, not in a committed file. Configure `BETTER_AUTH_URL` and `NEXT_PUBLIC_APP_URL` to the canonical active production origin. The production GitHub OAuth callback must be exactly `<production-app-url>/api/auth/callback/github`.
+Use `.env.example` as the single Vercel Environment Variables checklist. Set secrets in Vercel, not in a committed file. Configure `BETTER_AUTH_URL` and `NEXT_PUBLIC_APP_URL` to the canonical active production origin. Set `NEON_AUTH_BASE_URL` from the linked Neon branch and a unique `NEON_AUTH_COOKIE_SECRET` in Vercel. The production GitHub OAuth callback must be exactly `<production-app-url>/api/auth/callback/github`.
 
 The Razorpay price is configured as `RAZORPAY_PRO_AMOUNT=14900` with `RAZORPAY_CURRENCY=INR`; Razorpay amounts are in paise, so this is INR 149. Keep this non-secret setting separate from Razorpay credentials.
 
@@ -154,7 +156,7 @@ Check `package.json` for exact script names used in this repo.
 ## Deployment
 
 - App: Vercel is recommended for seamless Next.js deployments. Set environment variables in the Vercel project settings.
-- GitHub OAuth: set `BETTER_AUTH_URL` or `NEXT_PUBLIC_APP_URL` to the canonical production origin in Vercel, and register `<production-app-url>/api/auth/callback/github` with GitHub. Use a separate development OAuth app if the production app only accepts the production callback. Signing in from an alias or preview URL offers a link to the configured site so the state cookie and callback share an origin.
+- Authentication: Neon Managed Auth handles email/password sign-up; the existing Better Auth configuration continues to handle GitHub OAuth. Set the Managed Auth URL and cookie secret in Vercel, and register `<production-app-url>/api/auth/callback/github` with GitHub. Use a separate development OAuth app if the production app only accepts the production callback.
 - Repository indexing: configure and serve the Inngest endpoint at `/api/inngest`, with `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` set in the app environment. Connect and Re-index queue durable Inngest jobs; they do not run as detached Next.js requests. Indexing embeds file chunks and symbols, upserts the new vectors before removing stale ones, and fails visibly rather than replacing an index after incomplete GitHub fetches or failed embedding/Pinecone writes. Indexing is capped at 400 eligible files per repository.
 - Prisma migrations: use `npx prisma migrate deploy` in your deployment pipeline.
 - Background jobs: deploy Inngest workers or use Inngest serverless configuration.
