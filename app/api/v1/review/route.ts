@@ -30,23 +30,30 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "The diff is too large. Review a smaller change." }, { status: 413 });
   }
 
-  let body: { diff?: unknown; title?: unknown; repo?: unknown; strictness?: unknown };
+  let body: unknown;
   try {
     body = JSON.parse(raw);
   } catch {
     return NextResponse.json({ error: "The request body must be JSON" }, { status: 400 });
   }
 
-  if (typeof body.diff !== "string" || !body.diff.trim()) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return NextResponse.json({ error: "The request body must be a JSON object" }, { status: 400 });
+  }
+
+  const requestBody = body as { diff?: unknown; title?: unknown; repo?: unknown; strictness?: unknown };
+
+  if (typeof requestBody.diff !== "string" || !requestBody.diff.trim()) {
     return NextResponse.json({ error: "Send a unified diff in the \"diff\" field" }, { status: 400 });
   }
 
-  const strictness: Strictness = STRICTNESS_LEVELS.includes(body.strictness as Strictness)
-    ? (body.strictness as Strictness)
+  const diff = requestBody.diff;
+  const strictness: Strictness = STRICTNESS_LEVELS.includes(requestBody.strictness as Strictness)
+    ? (requestBody.strictness as Strictness)
     : DEFAULT_REVIEW_CONFIG.strictness;
   const config = { ...DEFAULT_REVIEW_CONFIG, strictness, inlineComments: false };
 
-  const prepared = prepareDiff(body.diff, config);
+  const prepared = prepareDiff(diff, config);
   if (!prepared.diff.trim()) {
     return NextResponse.json({ error: "There are no reviewable changes in this diff" }, { status: 422 });
   }
@@ -62,8 +69,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    const title = typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 140) : "Local changes";
-    const repo = typeof body.repo === "string" && body.repo.trim() ? body.repo.trim().slice(0, 100) : "local";
+    const title = typeof requestBody.title === "string" && requestBody.title.trim() ? requestBody.title.trim().slice(0, 140) : "Local changes";
+    const repo = typeof requestBody.repo === "string" && requestBody.repo.trim() ? requestBody.repo.trim().slice(0, 100) : "local";
 
     const generated = await generateStructuredReview({
       owner: "local",
