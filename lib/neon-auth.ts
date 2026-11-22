@@ -21,7 +21,7 @@ export function getNeonAuth() {
   const cookieSecret = process.env.NEON_AUTH_COOKIE_SECRET;
 
   if (!baseUrl) {
-    throw new NeonAuthConfigurationError("Set NEON_AUTH_BASE_URL to enable email sign-in.");
+    throw new NeonAuthConfigurationError("Set NEON_AUTH_BASE_URL to enable Google and email sign-in.");
   }
 
   if (!cookieSecret || cookieSecret.length < 32) {

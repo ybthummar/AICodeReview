@@ -6,16 +6,29 @@ import LoginUI from "@/module/auth/components/login-ui";
 import { signInCode, type GitHubSignInCode } from "@/module/auth/lib/github-sign-in";
 
 export default async function LoginPage({ searchParams }: {
-  searchParams: Promise<{ error?: string | string[]; state?: string | string[] }>;
+  searchParams: Promise<{
+    error?: string | string[];
+    state?: string | string[];
+    provider?: string | string[];
+  }>;
 }) {
   const query = await searchParams;
-  let error: GitHubSignInCode | null = query.error ? signInCode(query.error, "callback")
+  const provider = Array.isArray(query.provider) ? query.provider[0] : query.provider;
+  const isGoogleError = provider === "google" && Boolean(query.error);
+  let error: GitHubSignInCode | null = !isGoogleError && query.error ? signInCode(query.error, "callback")
     : query.state === "state_not_found" ? "state_not_found" : null;
   const session = await auth.api.getSession({ headers: await headers() }).catch(() => {
-    console.warn("[auth/github]", { stage: "login", code: "session_lookup_failed" });
+    console.warn("[auth]", { stage: "login", code: "session_lookup_failed" });
     error ??= "session_lookup_failed";
     return null;
   });
   if (session) redirect("/dashboard");
-  return <LoginUI authOrigin={authOrigin} initialError={error} emailAuthEnabled={isNeonAuthConfigured()} />;
+  return (
+    <LoginUI
+      authOrigin={authOrigin}
+      initialError={error}
+      initialGoogleError={isGoogleError}
+      emailAuthEnabled={isNeonAuthConfigured()}
+    />
+  );
 }

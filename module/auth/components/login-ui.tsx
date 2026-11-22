@@ -6,20 +6,25 @@ import { useRouter } from "next/navigation";
 import { neonGetSession, neonSignIn, neonSignUp, signIn } from "@/lib/auth-client";
 import { signInCode, signInMessage, type GitHubSignInCode } from "@/module/auth/lib/github-sign-in";
 
-export default function LoginPage({ authOrigin, initialError, emailAuthEnabled }: {
+export default function LoginPage({ authOrigin, initialError, initialGoogleError, emailAuthEnabled }: {
   authOrigin: string;
   initialError: GitHubSignInCode | null;
+  initialGoogleError: boolean;
   emailAuthEnabled: boolean;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [githubError, setGithubError] = useState(initialError);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [googleError, setGoogleError] = useState(
+    initialGoogleError ? "Google sign-in could not be completed. Please try again." : null,
+  );
   const [emailMode, setEmailMode] = useState<"signIn" | "signUp">("signIn");
   const [emailLoading, setEmailLoading] = useState(false);
   const [emailError, setEmailError] = useState<string | null>(null);
   const [emailNotice, setEmailNotice] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
-  const pending = loading || emailLoading;
+  const pending = loading || googleLoading || emailLoading;
 
   const handleGithubSignIn = async () => {
     if (window.location.origin !== authOrigin) {
@@ -42,6 +47,26 @@ export default function LoginPage({ authOrigin, initialError, emailAuthEnabled }
       setGithubError("network_error");
     }
     setLoading(false);
+  };
+
+  const handleGoogleSignIn = async () => {
+    setGoogleError(null);
+    setGoogleLoading(true);
+
+    try {
+      const { data, error } = await neonSignIn.social({
+        provider: "google",
+        callbackURL: new URL("/api/neon-auth/complete", window.location.origin).href,
+        errorCallbackURL: new URL("/login?provider=google", window.location.origin).href,
+      });
+      if (error || !data?.url) {
+        setGoogleError(error?.message || "Google sign-in could not be started. Please try again.");
+      }
+    } catch (error) {
+      setGoogleError(error instanceof Error ? error.message : "Google sign-in could not be started. Please try again.");
+    }
+
+    setGoogleLoading(false);
   };
 
   const handleEmailSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -117,7 +142,7 @@ export default function LoginPage({ authOrigin, initialError, emailAuthEnabled }
               {emailAuthEnabled && emailMode === "signUp" ? "Create your account" : "Welcome back"}
             </h2>
             <p className="mt-1 text-sm text-gray-500">
-              {emailAuthEnabled ? "Continue with GitHub or use your email and password." : "Sign in with GitHub to connect your repositories."}
+              Use GitHub sign-in to connect and review your repositories.
             </p>
           </div>
 
@@ -150,6 +175,22 @@ export default function LoginPage({ authOrigin, initialError, emailAuthEnabled }
               )}
               <p className="text-xs">Error code <code>{githubError}</code></p>
             </div>
+          )}
+
+          <button
+            type="button"
+            onClick={handleGoogleSignIn}
+            disabled={pending}
+            aria-busy={googleLoading}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-800 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <span aria-hidden="true" className="text-base font-bold text-blue-600">G</span>
+            {googleLoading ? "Connecting to Google..." : "Continue with Google"}
+          </button>
+          {googleError && (
+            <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {googleError}
+            </p>
           )}
 
           {emailAuthEnabled && (
