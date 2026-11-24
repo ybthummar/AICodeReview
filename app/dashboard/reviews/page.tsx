@@ -112,11 +112,15 @@ const ReviewCard: React.FC<ReviewCardProps> = ({ review, votes }) => {
     addSuffix: true,
   });
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(parsed.markdown);
-    setCopied(true);
-    toast.success("Review copied to clipboard");
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(parsed.markdown);
+      setCopied(true);
+      toast.success("Review copied to clipboard");
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Could not copy. Allow clipboard access and try again.");
+    }
   };
 
   return (
