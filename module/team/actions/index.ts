@@ -2,6 +2,7 @@
 
 import { auth } from "@/lib/auth";
 import prisma from "@/lib/db";
+import { Prisma } from "@/lib/generated/prisma/client";
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { fail, ok, type ActionResult } from "@/lib/action-result";
@@ -177,6 +178,23 @@ export async function getAccessibleRepositories(
       canAsk: repository.indexStatus === "ready" || Boolean(repository.indexRevision && repository.indexVectorCount),
     }))
     .filter((repository) => hasRole(repository.role, minimumRole));
+}
+
+export async function loadAccessibleRepositories(): Promise<ActionResult<AccessibleRepositoryView[]>> {
+  try {
+    return ok(await getAccessibleRepositories());
+  } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return fail(null, "Your session expired. Sign in again to load your repositories.");
+    }
+
+    const code = error instanceof Prisma.PrismaClientKnownRequestError ? error.code : undefined;
+    console.error("[repositories] Could not load connected repositories", { code });
+    if (code === "P2021" || code === "P2022") {
+      return fail(null, "Repositories are unavailable because the app database is missing a required update.");
+    }
+    return fail(null, "Could not load your connected repositories. Try again in a moment.");
+  }
 }
 
 export async function createWorkspace(name: string): Promise<ActionResult<{ id: string }>> {

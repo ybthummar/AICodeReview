@@ -16,16 +16,10 @@ import { queueRepositoryIndex } from "@/module/repository/lib/index-jobs";
 
 const MAX_QUESTION_LENGTH = 1000;
 
-async function requireSession() {
-  const session = await auth.api.getSession({
+async function getSession() {
+  return auth.api.getSession({
     headers: await headers(),
   });
-
-  if (!session?.user) {
-    throw new Error("Unauthorized");
-  }
-
-  return session;
 }
 
 export async function askCodebase(input: {
@@ -36,7 +30,8 @@ export async function askCodebase(input: {
   let billedUserId: string | null = null;
 
   try {
-    const session = await requireSession();
+    const session = await getSession();
+    if (!session?.user) return fail(null, "Your session expired. Sign in again to ask a question.");
 
     if (!input || typeof input.repositoryId !== "string" || !input.repositoryId.trim()) {
       return fail(new Error("Select a repository first."));
@@ -64,11 +59,7 @@ export async function askCodebase(input: {
 
     if ("empty" in result) {
       await refundUsage(billedUserId, "chats");
-      return ok({
-        answer: "No supported source files were found on this repository’s default branch.",
-        sources: [],
-        indexed: false,
-      });
+      return fail(null, "GitHub returned no supported source files on this repository’s default branch.");
     }
 
     return ok(result);
@@ -86,7 +77,8 @@ export async function askCodebase(input: {
 
 export async function reindexRepository(repositoryId: string): Promise<ActionResult> {
   try {
-    const session = await requireSession();
+    const session = await getSession();
+    if (!session?.user) return fail(null, "Your session expired. Sign in again to re-index.");
 
     const access = await findAccessibleRepository(session.user, { id: repositoryId }, "OWNER");
     if (!access) return fail(new Error("Only the person who connected the repository can re-index it."));

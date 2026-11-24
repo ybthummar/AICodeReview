@@ -90,8 +90,8 @@ export default function ChatPage() {
   const lastRequest = ask.variables;
   const currentRequest = lastRequest?.repositoryId === repositoryId;
   const answering = currentRequest && ask.isPending;
-  const askError = currentRequest && (ask.error
-    ? "The assistant is unavailable right now. Please try again."
+  const askError = currentRequest && !ask.isPending && (ask.error
+    ? "The request failed before an answer was returned. Try the question again."
     : ask.data?.ok === false ? ask.data.error : null);
 
   useEffect(() => {
@@ -173,10 +173,12 @@ export default function ChatPage() {
           </div>
         )}
         <div ref={transcriptRef} role="log" aria-label="Codebase conversation" className="min-h-64 max-h-[max(19rem,calc(100dvh-21rem))] flex-1 space-y-5 overflow-y-auto overscroll-contain p-4 sm:p-6">
-          {repositoriesQuery.isError ? (
+          {repositoriesQuery.isError && !repositoryId ? (
             <div className="flex flex-col items-center gap-3 py-12 text-center text-sm text-slate-700" role="alert">
-              Repositories could not be loaded.
-              <Button variant="outline" size="sm" onClick={() => void repositoriesQuery.refetch()}>Retry</Button>
+              <p className="font-medium text-red-800">{repositoriesQuery.error.message}</p>
+              <Button variant="outline" size="sm" disabled={repositoriesQuery.isFetching} onClick={() => void repositoriesQuery.refetch()}>
+                {repositoriesQuery.isFetching ? "Retrying…" : "Retry loading repositories"}
+              </Button>
             </div>
           ) : repositoriesQuery.isPending ? (
             <div className="flex items-center justify-center gap-2 py-16 text-sm text-slate-600" role="status">
