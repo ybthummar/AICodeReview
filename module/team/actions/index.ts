@@ -61,6 +61,7 @@ export interface AccessibleRepositoryView {
   indexFilesDone: number;
   indexFilesTotal: number | null;
   indexUpdatedAt: string | null;
+  canAsk: boolean;
 }
 
 async function requireSession() {
@@ -173,6 +174,7 @@ export async function getAccessibleRepositories(
       indexFilesDone: repository.indexFilesDone,
       indexFilesTotal: repository.indexFilesTotal,
       indexUpdatedAt: repository.indexUpdatedAt?.toISOString() ?? null,
+      canAsk: repository.indexStatus === "ready" || Boolean(repository.indexRevision && repository.indexVectorCount),
     }))
     .filter((repository) => hasRole(repository.role, minimumRole));
 }
@@ -306,7 +308,7 @@ export async function addWorkspaceMember(
       select: { id: true },
     });
     if (!target) {
-      return fail(new Error("No RepoPilot user has that email yet. Ask them to sign in with GitHub first."));
+      return fail(new Error("No RepoPilot user has that email yet. Ask them to sign in to RepoPilot first."));
     }
 
     const existing = await getMyRole(workspaceId, target.id);
@@ -410,12 +412,11 @@ export async function removeWorkspaceMember(
       }
     }
 
-    await prisma.workspaceMember.delete({ where: { id: member.id } });
-
     // Repositories a departing member shared stop being shared with the team.
-    await prisma.workspaceRepository.deleteMany({
-      where: { workspaceId, repository: { userId: member.userId } },
-    });
+    await prisma.$transaction([
+      prisma.workspaceMember.delete({ where: { id: member.id } }),
+      prisma.workspaceRepository.deleteMany({ where: { workspaceId, repository: { userId: member.userId } } }),
+    ]);
 
     await recordAudit({
       userId: session.user.id,

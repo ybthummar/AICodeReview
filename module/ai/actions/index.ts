@@ -98,7 +98,7 @@ export async function reviewPullRequest(
       };
     }
 
-    const token = await resolveReviewToken(repository.userId, owner);
+    const token = await resolveReviewToken(repository.userId, owner, repo);
     if (!token) {
       throw new Error("No Github access token found for repository owner or admin");
     }

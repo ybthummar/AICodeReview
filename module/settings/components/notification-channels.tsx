@@ -41,7 +41,7 @@ export default function NotificationChannels() {
   const [trigger, setTrigger] = useState<NotificationTrigger>("risky");
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  const { data: channels, isLoading } = useQuery({
+  const { data: channels, isLoading, isError, refetch } = useQuery({
     queryKey: ["notification-channels"],
     queryFn: async () => await getNotificationChannels(),
     refetchOnWindowFocus: false,
@@ -85,7 +85,7 @@ export default function NotificationChannels() {
           <BellRing className="h-5 w-5 text-blue-600" /> Alerts
         </CardTitle>
         <CardDescription>
-          Post a message to Slack, Discord or Microsoft Teams when a review finishes. Paste an incoming-webhook URL from your workspace.
+          Send review alerts to Slack, Discord, or Microsoft Teams. For Teams, use a Workflows webhook that allows anyone with the URL to trigger it.
         </CardDescription>
       </CardHeader>
 
@@ -132,6 +132,11 @@ export default function NotificationChannels() {
         {isLoading ? (
           <div className="flex items-center gap-2 text-sm text-slate-500">
             <Loader2 className="h-4 w-4 animate-spin text-blue-600" /> Loading channels...
+          </div>
+        ) : isError && !channels ? (
+          <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 p-4 text-sm text-slate-700">
+            Notification channels could not be loaded.
+            <Button variant="outline" size="sm" onClick={() => void refetch()}>Retry</Button>
           </div>
         ) : channels && channels.length > 0 ? (
           <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
@@ -186,7 +191,7 @@ export default function NotificationChannels() {
                   variant="outline"
                   size="sm"
                   disabled={busyId === channel.id}
-                  onClick={() => runOnChannel(channel.id, () => sendTestNotification(channel.id), "Test message sent")}
+                  onClick={() => runOnChannel(channel.id, () => sendTestNotification(channel.id), "Test accepted. Check the destination channel.")}
                   className="h-8 gap-1.5 text-xs"
                 >
                   {busyId === channel.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}

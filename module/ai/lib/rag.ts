@@ -160,7 +160,14 @@ export function repositoryIndexKey(fullName: string, revision?: string | null) {
 }
 
 export async function repositoryIndexIsVisible(indexKey: string, vectorCount: number) {
-  return (await listIdsWithPrefix(`${indexKey}::`)).length === vectorCount;
+  if ((await listIdsWithPrefix(`${indexKey}::`)).length !== vectorCount) return false;
+
+  // Listing IDs can succeed before the query API can return the new revision.
+  const dimension = await getPineconeIndexDimension();
+  const probe = Array<number>(dimension).fill(0);
+  probe[0] = 1;
+  const results = await searchPineconeDocuments(probe, indexKey, 1);
+  return results.matches.some((match) => match.repoId === indexKey && isCodeMetadata(match));
 }
 
 export async function purgeRepositoryIndex(fullName: string, revision?: string | null) {

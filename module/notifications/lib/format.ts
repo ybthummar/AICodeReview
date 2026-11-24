@@ -18,11 +18,13 @@ export interface ReviewAlert {
   prTitle: string;
   prUrl: string;
   dashboardUrl: string;
-  verdict: ReviewVerdict;
-  riskLevel: RiskLevel;
-  riskScore: number;
-  qualityScore: number;
-  securityScore: number;
+  assessment: {
+    verdict: ReviewVerdict;
+    riskLevel: RiskLevel;
+    riskScore: number;
+    qualityScore: number;
+    securityScore: number;
+  } | null;
   topFindings: { severity: string; title: string }[];
 }
 
@@ -36,13 +38,13 @@ export function validateWebhookUrl(
     return { ok: false, error: "Enter a valid webhook URL" };
   }
 
-  if (url.protocol !== "https:") {
+  if (url.protocol !== "https:" || url.port || url.username || url.password || url.hash) {
     return { ok: false, error: "Webhook URLs must use https" };
   }
 
   const host = url.hostname.toLowerCase();
 
-  if (host === "hooks.slack.com" && url.pathname.startsWith("/services/")) {
+  if ((host === "hooks.slack.com" || host === "hooks.slack-gov.com") && /^\/services\/[^/]+\/[^/]+\/[^/]+\/?$/.test(url.pathname)) {
     return { ok: true, kind: "slack", url: url.toString() };
   }
 
@@ -56,12 +58,12 @@ export function validateWebhookUrl(
     return { ok: true, kind: "discord", url: url.toString() };
   }
 
-  if (
-    host.endsWith(".webhook.office.com") ||
-    host.endsWith(".logic.azure.com") ||
-    host.endsWith(".powerplatform.com") ||
-    host === "outlook.office.com"
-  ) {
+  if (host.endsWith(".webhook.office.com") || host === "outlook.office.com") {
+    return { ok: false, error: "This Teams connector has been retired. Replace it with a Microsoft Teams Workflows webhook." };
+  }
+
+  const teamsWorkflowPath = /^\/(?:powerautomate\/automations\/direct\/)?workflows\/[^/]+\/triggers\/[^/]+\/paths\/invoke\/?$/;
+  if ((host.endsWith(".logic.azure.com") || host.endsWith(".api.powerplatform.com")) && teamsWorkflowPath.test(url.pathname)) {
     return { ok: true, kind: "teams", url: url.toString() };
   }
 
@@ -73,8 +75,9 @@ export function validateWebhookUrl(
 
 export function shouldNotify(trigger: NotificationTrigger, alert: ReviewAlert): boolean {
   if (trigger === "all") return true;
-  if (trigger === "blocking") return alert.verdict === "request_changes";
-  return alert.verdict === "request_changes" || alert.riskLevel !== "low";
+  if (!alert.assessment) return false;
+  if (trigger === "blocking") return alert.assessment.verdict === "request_changes";
+  return alert.assessment.verdict === "request_changes" || alert.assessment.riskLevel !== "low";
 }
 
 const VERDICT_TEXT: Record<ReviewVerdict, string> = {
@@ -91,42 +94,53 @@ const RISK_COLORS: Record<RiskLevel, { hex: string; int: number }> = {
 };
 
 function headline(alert: ReviewAlert): string {
-  return `${alert.repoFullName} #${alert.prNumber}: ${VERDICT_TEXT[alert.verdict]}`;
+  const verdict = alert.assessment ? VERDICT_TEXT[alert.assessment.verdict] : "Review completed";
+  return `${alert.repoFullName} #${alert.prNumber}: ${verdict}`;
 }
 
 function findingLines(alert: ReviewAlert): string[] {
-  return alert.topFindings.map((f) => `${f.severity.toUpperCase()}: ${f.title}`);
+  return alert.topFindings.slice(0, 3).map((f) => `${f.severity.toUpperCase()}: ${f.title.slice(0, 800)}`);
 }
 
 export function buildAlertPayload(kind: NotificationKind, alert: ReviewAlert): unknown {
-  const scores = `Risk ${alert.riskScore}/100 · Quality ${alert.qualityScore}/100 · Security ${alert.securityScore}/100`;
+  const assessment = alert.assessment;
+  const scores = assessment ? `Risk ${assessment.riskScore}/100 · Quality ${assessment.qualityScore}/100 · Security ${assessment.securityScore}/100` : null;
+  const color = assessment ? RISK_COLORS[assessment.riskLevel] : { hex: "64748B", int: 0x64748b };
   const findings = findingLines(alert);
 
   if (kind === "slack") {
     return {
-      text: `${headline(alert)}: ${alert.prTitle}`,
+      text: `${headline(alert)}: ${alert.prTitle}`.slice(0, 2000),
+      mrkdwn: false,
+      unfurl_links: false,
+      unfurl_media: false,
       attachments: [
         {
-          color: `#${RISK_COLORS[alert.riskLevel].hex}`,
+          color: `#${color.hex}`,
           blocks: [
             {
               type: "section",
               text: {
-                type: "mrkdwn",
-                text: `*<${alert.prUrl}|${alert.repoFullName} #${alert.prNumber}: ${alert.prTitle}>*\n${VERDICT_TEXT[alert.verdict]} · ${scores}`,
+                type: "plain_text",
+                text: [headline(alert), alert.prTitle.slice(0, 2000), scores].filter(Boolean).join("\n"),
               },
             },
             ...(findings.length > 0
               ? [
                   {
                     type: "section",
-                    text: { type: "mrkdwn", text: findings.map((f) => `• ${f}`).join("\n") },
+                    text: { type: "plain_text", text: findings.map((f) => `• ${f}`).join("\n") },
                   },
                 ]
               : []),
             {
               type: "actions",
               elements: [
+                {
+                  type: "button",
+                  text: { type: "plain_text", text: "Open pull request" },
+                  url: alert.prUrl,
+                },
                 {
                   type: "button",
                   text: { type: "plain_text", text: "Open review" },
@@ -147,8 +161,9 @@ export function buildAlertPayload(kind: NotificationKind, alert: ReviewAlert): u
         {
           title: `${alert.repoFullName} #${alert.prNumber}: ${alert.prTitle}`.slice(0, 250),
           url: alert.prUrl,
-          color: RISK_COLORS[alert.riskLevel].int,
-          description: [`**${VERDICT_TEXT[alert.verdict]}**`, scores, ...findings.map((f) => `• ${f}`)]
+          color: color.int,
+          description: [`**${assessment ? VERDICT_TEXT[assessment.verdict] : "Review completed"}**`, scores, ...findings.map((f) => `• ${f}`)]
+            .filter(Boolean)
             .join("\n")
             .slice(0, 1800),
           footer: { text: "RepoPilot AI review" },
@@ -163,14 +178,15 @@ export function buildAlertPayload(kind: NotificationKind, alert: ReviewAlert): u
     attachments: [
       {
         contentType: "application/vnd.microsoft.card.adaptive",
+        contentUrl: null,
         content: {
           $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
           type: "AdaptiveCard",
           version: "1.4",
           body: [
             { type: "TextBlock", text: headline(alert), weight: "Bolder", size: "Medium", wrap: true },
-            { type: "TextBlock", text: alert.prTitle, wrap: true },
-            { type: "TextBlock", text: scores, isSubtle: true, wrap: true },
+            { type: "TextBlock", text: alert.prTitle.slice(0, 2000), wrap: true },
+            ...(scores ? [{ type: "TextBlock", text: scores, isSubtle: true, wrap: true }] : []),
             ...findings.map((f) => ({ type: "TextBlock", text: `• ${f}`, wrap: true })),
           ],
           actions: [

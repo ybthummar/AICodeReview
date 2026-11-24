@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { App } from "octokit";
+import { App, RequestError } from "octokit";
 import prisma from "@/lib/db";
 
 const STATE_TTL_MS = 15 * 60 * 1000;
@@ -38,30 +38,38 @@ export async function getInstallationToken(installationId: number): Promise<stri
   return authentication.token;
 }
 
-export async function getInstallationTokenForAccount(accountLogin: string): Promise<string | null> {
+async function findLinkedRepositoryInstallation(owner: string, repo: string): Promise<number | null> {
   if (!isGitHubAppConfigured()) return null;
 
-  const installation = await prisma.gitHubInstallation.findFirst({
-    where: { accountLogin: { equals: accountLogin, mode: "insensitive" } },
+  const linked = await prisma.gitHubInstallation.findFirst({
+    where: { accountLogin: { equals: owner, mode: "insensitive" } },
     select: { installationId: true },
   });
-  if (!installation) return null;
+  if (!linked) return null;
 
   try {
-    return await getInstallationToken(installation.installationId);
+    const { data } = await getApp().octokit.rest.apps.getRepoInstallation({
+      owner, repo, request: { signal: AbortSignal.timeout(10_000) },
+    });
+    return data.id === linked.installationId && !data.suspended_at ? data.id : null;
   } catch (error) {
-    console.warn(`Could not create an installation token for ${accountLogin}:`, error);
+    if (error instanceof RequestError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+export async function getInstallationTokenForRepository(owner: string, repo: string): Promise<string | null> {
+  try {
+    const installationId = await findLinkedRepositoryInstallation(owner, repo);
+    return installationId === null ? null : await getInstallationToken(installationId);
+  } catch (error) {
+    console.warn("GitHub App token unavailable", { owner, repo, status: error instanceof RequestError ? error.status : undefined });
     return null;
   }
 }
 
-export async function hasInstallationForAccount(accountLogin: string): Promise<boolean> {
-  if (!isGitHubAppConfigured()) return false;
-
-  const count = await prisma.gitHubInstallation.count({
-    where: { accountLogin: { equals: accountLogin, mode: "insensitive" } },
-  });
-  return count > 0;
+export async function hasInstallationForRepository(owner: string, repo: string): Promise<boolean> {
+  return await findLinkedRepositoryInstallation(owner, repo) !== null;
 }
 
 export async function fetchInstallationAccount(

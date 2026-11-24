@@ -350,7 +350,7 @@ export default function TeamPage() {
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["team-overview"],
     queryFn: async () => await getTeamOverview(),
     refetchOnWindowFocus: false,
@@ -417,6 +417,11 @@ export default function TeamPage() {
       {isLoading ? (
         <div className="flex min-h-[200px] items-center justify-center gap-2 text-slate-500">
           <Loader2 className="h-5 w-5 animate-spin text-blue-600" /> Loading workspaces...
+        </div>
+      ) : isError && !data ? (
+        <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 p-4 text-sm text-slate-700">
+          Team workspaces could not be loaded.
+          <Button variant="outline" size="sm" onClick={() => void refetch()}>Retry</Button>
         </div>
       ) : data && data.workspaces.length > 0 ? (
         <div className="space-y-5">

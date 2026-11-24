@@ -1,6 +1,6 @@
 import prisma from "@/lib/db";
 import { ADMIN_EMAILS, isAdminUser } from "@/lib/admin";
-import { getInstallationTokenForAccount } from "@/module/github/lib/app";
+import { getInstallationTokenForRepository } from "@/module/github/lib/app";
 import { hasRole, normalizeRole, type WorkspaceRole } from "@/module/team/lib/roles";
 
 export { hasRole, normalizeRole, ROLE_LABELS, WORKSPACE_ROLES } from "@/module/team/lib/roles";
@@ -106,12 +106,11 @@ export async function getGitHubTokenForUser(userId: string): Promise<string | nu
 
 export async function requireRepositoryToken(
   repositoryOwnerId: string,
-  accountLogin?: string
+  owner: string,
+  repo: string,
 ): Promise<string> {
-  if (accountLogin) {
-    const installationToken = await getInstallationTokenForAccount(accountLogin);
-    if (installationToken) return installationToken;
-  }
+  const installationToken = await getInstallationTokenForRepository(owner, repo);
+  if (installationToken) return installationToken;
 
   const token = await getGitHubTokenForUser(repositoryOwnerId);
 
@@ -125,12 +124,11 @@ export async function requireRepositoryToken(
 // Webhook-driven reviews fall back to an admin or any linked token so public repos keep working.
 export async function resolveReviewToken(
   repositoryOwnerId: string,
-  accountLogin?: string
+  owner: string,
+  repo: string,
 ): Promise<string | null> {
-  if (accountLogin) {
-    const installationToken = await getInstallationTokenForAccount(accountLogin);
-    if (installationToken) return installationToken;
-  }
+  const installationToken = await getInstallationTokenForRepository(owner, repo);
+  if (installationToken) return installationToken;
 
   const own = await getGitHubTokenForUser(repositoryOwnerId);
   if (own) return own;

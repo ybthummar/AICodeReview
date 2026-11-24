@@ -42,7 +42,7 @@ export async function getEngineeringAnalytics(
     const pullRequestGroups = await Promise.all(
       repositories.map(async (repository): Promise<AnalyticsPullRequest[]> => {
         try {
-          const token = await requireRepositoryToken(repository.userId, repository.owner);
+          const token = await requireRepositoryToken(repository.userId, repository.owner, repository.name);
           const closed = await listClosedPullRequests(token, repository.owner, repository.name);
 
           return closed.map((pr) => ({ ...pr, repoFullName: repository.fullName }));

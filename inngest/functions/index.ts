@@ -82,7 +82,7 @@ export const indexRepo = inngest.createFunction(
     const activeJob = { id: repository.id, indexJobId: jobId, indexStatus: "indexing" };
     const indexKey = repositoryIndexKey(repository.fullName, jobId);
     const files = await step.run("list-source-files", async () => {
-      const token = await requireRepositoryToken(repository.userId, repository.owner);
+      const token = await requireRepositoryToken(repository.userId, repository.owner, repository.name);
       const files = await getRepositoryIndexFiles(token, repository.owner, repository.name);
       await prisma.repository.updateMany({
         where: activeJob,
@@ -98,7 +98,7 @@ export const indexRepo = inngest.createFunction(
         if (!await prisma.repository.findFirst({ where: activeJob, select: { id: true } })) return null;
 
         const started = performance.now();
-        const token = await requireRepositoryToken(repository.userId, repository.owner);
+        const token = await requireRepositoryToken(repository.userId, repository.owner, repository.name);
         const contents = await getRepositoryIndexFileContents(token, repository.owner, repository.name, batch);
         const fetched = performance.now();
         const { indexed } = await indexCodebaseBatch(indexKey, contents).catch((error: unknown) => {

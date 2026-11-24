@@ -59,7 +59,7 @@ export default function ChatPage() {
   const repositoryId = selected?.id ?? "";
   const messages = threads[repositoryId] ?? EMPTY_THREAD;
   const indexing = indexInProgress(selected?.indexStatus ?? null);
-  const canAsk = selected?.indexStatus === "ready";
+  const canAsk = selected?.canAsk ?? false;
 
   const ask = useMutation({
     mutationFn: (request: Parameters<typeof askCodebase>[0]) => askCodebase(request),
@@ -164,14 +164,14 @@ export default function ChatPage() {
             </Button>
           )}
         </div>
-        {selected && !canAsk && (
+        {selected && (indexing || !canAsk || selected.indexStatus === "failed") && (
           <div className="border-b border-slate-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-900 sm:px-6" role="status">
             {indexing
               ? `Indexing ${selected.fullName}${selected.indexFilesTotal === null
                 ? " — preparing repository files..."
-                : ` — ${Math.min(selected.indexFilesDone, selected.indexFilesTotal)} of ${selected.indexFilesTotal} files processed.`}`
+                : ` — ${Math.min(selected.indexFilesDone, selected.indexFilesTotal)} of ${selected.indexFilesTotal} files processed.`}${canAsk ? " Chat can still use the previous index." : ""}`
               : selected.indexStatus === "failed"
-                ? "Indexing failed. Re-index the repository to try again."
+                ? (canAsk ? "Re-indexing failed. Chat is using the previous index." : "Indexing failed. Re-index the repository to try again.")
                 : selected.indexStatus === "empty"
                   ? "Indexing finished, but no indexable files were found."
                     : selected.role === "OWNER"

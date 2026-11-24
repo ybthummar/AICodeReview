@@ -50,7 +50,7 @@ export async function askCodebase(input: {
     await consumeUsage(session.user.id, "chats");
     billedUserId = session.user.id;
 
-    const token = await requireRepositoryToken(repository.userId, repository.owner);
+    const token = await requireRepositoryToken(repository.userId, repository.owner, repository.name);
     const result = await answerCodebaseQuestion({
       repository,
       token,
@@ -85,14 +85,14 @@ export async function reindexRepository(repositoryId: string): Promise<ActionRes
     const access = await findAccessibleRepository(session.user, { id: repositoryId }, "OWNER");
     if (!access) return fail(new Error("Only the person who connected the repository can re-index it."));
 
-    await queueRepositoryIndex({
+    const queued = await queueRepositoryIndex({
       id: access.repository.id,
       owner: access.repository.owner,
       name: access.repository.name,
       userId: access.repository.userId,
     });
 
-    return ok(null);
+    return queued ? ok(null) : fail(new Error("Could not queue indexing for this repository. Refresh and try again."));
   } catch (error) {
     return fail(error, "Could not start indexing.");
   }

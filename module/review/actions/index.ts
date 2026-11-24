@@ -242,7 +242,7 @@ export async function applyFindingFix(
     }
 
     const { repository } = access;
-    const token = await requireRepositoryToken(repository.userId, repository.owner);
+    const token = await requireRepositoryToken(repository.userId, repository.owner, repository.name);
 
     const result = await applySuggestedFix({
       token,
@@ -316,7 +316,7 @@ export async function getConnectedReposPullRequests(
 
   await Promise.allSettled(
     repositories.map(async (repo) => {
-      const token = await resolveReviewToken(repo.userId, repo.owner);
+      const token = await resolveReviewToken(repo.userId, repo.owner, repo.name);
       if (!token) return;
 
       const canReview = hasRole(roleForRepository(repo, session.user), "MEMBER");
@@ -373,7 +373,7 @@ export async function getRepoPullRequests(
     return [];
   }
 
-  const token = await resolveReviewToken(access.repository.userId, access.repository.owner);
+  const token = await resolveReviewToken(access.repository.userId, access.repository.owner, access.repository.name);
   if (!token) {
     return [];
   }
@@ -464,7 +464,7 @@ export async function updateFindingStatus(
 
     // Keep the GitHub commit status in sync once blocking findings are cleared or reopened.
     if (updated.headSha) {
-      const token = await resolveReviewToken(access.repository.userId, access.repository.owner);
+      const token = await resolveReviewToken(access.repository.userId, access.repository.owner, access.repository.name);
       if (token) {
         await publishQualityGate(
           access.repository.userId,

@@ -209,9 +209,8 @@ export async function notifyReviewCompleted(input: {
   prTitle: string;
   insights: ReviewInsights | null;
 }) {
-  if (!input.insights) return;
-
-  const open = getOpenFindings(input.insights);
+  const insights = input.insights;
+  const open = insights ? getOpenFindings(insights) : [];
 
   await sendReviewAlert(input.userId, {
     repoFullName: `${input.owner}/${input.repo}`,
@@ -219,11 +218,13 @@ export async function notifyReviewCompleted(input: {
     prTitle: input.prTitle,
     prUrl: `https://github.com/${input.owner}/${input.repo}/pull/${input.prNumber}`,
     dashboardUrl: `${APP_BASE_URL}/dashboard/reviews`,
-    verdict: input.insights.verdict,
-    riskLevel: input.insights.riskLevel,
-    riskScore: input.insights.riskScore,
-    qualityScore: input.insights.qualityScore,
-    securityScore: input.insights.securityScore,
+    assessment: insights && {
+      verdict: insights.verdict,
+      riskLevel: insights.riskLevel,
+      riskScore: insights.riskScore,
+      qualityScore: insights.qualityScore,
+      securityScore: insights.securityScore,
+    },
     topFindings: open.slice(0, 3).map((f) => ({ severity: f.severity, title: f.title })),
   });
 }

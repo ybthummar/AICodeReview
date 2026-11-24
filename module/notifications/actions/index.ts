@@ -175,11 +175,7 @@ export async function sendTestNotification(id: string): Promise<ActionResult> {
       prTitle: "Test alert from RepoPilot",
       prUrl: appUrl,
       dashboardUrl: `${appUrl}/dashboard/reviews`,
-      verdict: "request_changes",
-      riskLevel: "high",
-      riskScore: 53,
-      qualityScore: 71,
-      securityScore: 64,
+      assessment: { verdict: "request_changes", riskLevel: "high", riskScore: 53, qualityScore: 71, securityScore: 64 },
       topFindings: [
         { severity: "high", title: "Unvalidated input reaches a database query" },
         { severity: "medium", title: "Missing error handling around network call" },

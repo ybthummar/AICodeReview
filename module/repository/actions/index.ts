@@ -12,7 +12,7 @@ import {
   getRepositories,
   verifyRepositoryAccess,
 } from "@/module/github/lib/github";
-import { hasInstallationForAccount } from "@/module/github/lib/app";
+import { hasInstallationForRepository } from "@/module/github/lib/app";
 import { queueRepositoryIndex } from "@/module/repository/lib/index-jobs";
 import { recordAudit } from "@/module/audit/lib/audit";
 import { getGitHubTokenForUser } from "@/module/team/lib/access";
@@ -154,11 +154,17 @@ export const connectRepository = async (
     }
 
     // The GitHub App delivers events itself, so a second repository webhook would double every review.
-    let webhook: WebhookMode;
-    if (await hasInstallationForAccount(canonical.owner)) {
-      webhook = "app";
-    } else {
-      webhook = (await createWebhook(canonical.owner, canonical.name)) ? "registered" : "failed";
+    let webhook: WebhookMode = "failed";
+    try {
+      if (await hasInstallationForRepository(canonical.owner, canonical.name)) {
+        webhook = "app";
+      } else if (await createWebhook(canonical.owner, canonical.name)) {
+        webhook = "registered";
+      }
+    } catch (error) {
+      console.warn("Could not set up the repository webhook", {
+        owner: canonical.owner, repo: canonical.name, status: error instanceof RequestError ? error.status : undefined,
+      });
     }
 
     // The repository is saved even when the webhook is not possible (for example on localhost).

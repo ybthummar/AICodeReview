@@ -46,7 +46,7 @@ export async function investigateRepositoryIssue(
     if (!access) return fail(new Error("You need member access to investigate issues."));
 
     const { repository } = access;
-    const token = await requireRepositoryToken(repository.userId, repository.owner);
+    const token = await requireRepositoryToken(repository.userId, repository.owner, repository.name);
     const issue = await getGitHubIssueContext(token, repository.owner, repository.name, issueNumber);
     if (!issue) return fail(new Error("Enter a GitHub issue number for the selected repository."));
 
@@ -102,7 +102,7 @@ async function loadContext(repositoryId: string, prNumber: number, minimumRole: 
   }
 
   const { repository } = access;
-  const token = await requireRepositoryToken(repository.userId, repository.owner);
+  const token = await requireRepositoryToken(repository.userId, repository.owner, repository.name);
   const pr = await getPullRequestDiff(token, repository.owner, repository.name, prNumber);
 
   return { session, repository, token, pr };
@@ -117,7 +117,7 @@ export async function getToolkitPullRequests(
     const access = await findAccessibleRepository(session.user, { id: repositoryId });
     if (!access) return fail(new Error("Repository not found"));
 
-    const token = await requireRepositoryToken(access.repository.userId, access.repository.owner);
+    const token = await requireRepositoryToken(access.repository.userId, access.repository.owner, access.repository.name);
     const pulls = await getOpenPullRequests(token, access.repository.owner, access.repository.name, "all", { propagateErrors: true });
 
     return ok(
@@ -175,7 +175,7 @@ export async function applyPullRequestDescription(
     const cleanBody = body.trim().slice(0, MAX_BODY);
     if (!cleanTitle) return fail(new Error("The title cannot be empty."));
 
-    const token = await requireRepositoryToken(access.repository.userId, access.repository.owner);
+    const token = await requireRepositoryToken(access.repository.userId, access.repository.owner, access.repository.name);
     await updatePullRequest(token, access.repository.owner, access.repository.name, prNumber, {
       title: cleanTitle,
       body: cleanBody,
@@ -258,7 +258,7 @@ export async function generateReleaseNotes(
 
     const range = Math.min(90, Math.max(1, Math.round(days) || 7));
     const { repository } = access;
-    const token = await requireRepositoryToken(repository.userId, repository.owner);
+    const token = await requireRepositoryToken(repository.userId, repository.owner, repository.name);
 
     const since = new Date(Date.now() - range * 24 * 60 * 60 * 1000);
     const merged = await listMergedPullRequests(token, repository.owner, repository.name, since);

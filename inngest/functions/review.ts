@@ -128,7 +128,7 @@ export async function performDirectReview({
   }
 
   try {
-    const token = await resolveReviewToken(userId, owner);
+    const token = await resolveReviewToken(userId, owner, repo);
     if (!token) {
       throw new Error("No GitHub access token found for user or admin");
     }
@@ -257,7 +257,7 @@ export const generateReview = inngest.createFunction(
 
     // Tokens are resolved inside each step so they are never persisted in step output.
     const pr = await step.run("fetch-pr-data", async () => {
-      const token = await resolveReviewToken(userId, owner);
+      const token = await resolveReviewToken(userId, owner, repo);
       if (!token) {
         throw new Error("No GitHub access token found");
       }
@@ -328,14 +328,14 @@ export const generateReview = inngest.createFunction(
     });
 
     await step.run("post-comment", async () => {
-      const token = await resolveReviewToken(userId, owner);
+      const token = await resolveReviewToken(userId, owner, repo);
       if (!token) throw new Error("No GitHub access token found");
 
       await postMainComment(token, owner, repo, prNumber, generated.markdown, finalized.insights);
     });
 
     await step.run("post-inline-comments", async () => {
-      const token = await resolveReviewToken(userId, owner);
+      const token = await resolveReviewToken(userId, owner, repo);
       if (!token) return 0;
 
       return await postInlineFindings({
@@ -352,7 +352,7 @@ export const generateReview = inngest.createFunction(
     });
 
     await step.run("quality-gate", async () => {
-      const token = await resolveReviewToken(userId, owner);
+      const token = await resolveReviewToken(userId, owner, repo);
       if (!token) return;
 
       await publishQualityGate(userId, token, owner, repo, pr.headSha, finalized.insights);

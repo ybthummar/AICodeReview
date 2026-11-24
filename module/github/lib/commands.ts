@@ -147,7 +147,7 @@ export async function handleCommentEvent(
   });
   if (!repository) return;
 
-  const token = await resolveReviewToken(repository.userId, repository.owner);
+  const token = await resolveReviewToken(repository.userId, repository.owner, repository.name);
   if (!token) return;
 
   const { owner, name } = repository;
