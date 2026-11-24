@@ -6,10 +6,12 @@ import { fail, ok, type ActionResult } from "@/lib/action-result";
 import { consumeUsage, QuotaExceededError, refundUsage } from "@/module/billing/lib/usage";
 import {
   answerCodebaseQuestion,
+  CodebaseAnswerError,
   type ChatAnswer,
   type ChatMessage,
 } from "@/module/chat/lib/answer";
-import { findAccessibleRepository, requireRepositoryToken } from "@/module/team/lib/access";
+import { findAccessibleRepository, hasRole, requireRepositoryToken } from "@/module/team/lib/access";
+import { getGitHubFileContent } from "@/module/github/lib/github";
 import { queueRepositoryIndex } from "@/module/repository/lib/index-jobs";
 
 const MAX_QUESTION_LENGTH = 1000;
@@ -36,7 +38,10 @@ export async function askCodebase(input: {
   try {
     const session = await requireSession();
 
-    const question = input.question.trim();
+    if (!input || typeof input.repositoryId !== "string" || !input.repositoryId.trim()) {
+      return fail(new Error("Select a repository first."));
+    }
+    const question = typeof input.question === "string" ? input.question.trim() : "";
     if (!question) return fail(new Error("Ask a question about the code."));
     if (question.length > MAX_QUESTION_LENGTH) {
       return fail(new Error(`Questions are limited to ${MAX_QUESTION_LENGTH} characters.`));
@@ -50,19 +55,24 @@ export async function askCodebase(input: {
     await consumeUsage(session.user.id, "chats");
     billedUserId = session.user.id;
 
-    const token = await requireRepositoryToken(repository.userId, repository.owner, repository.name);
+    let legacyToken: Promise<string | null> | undefined;
     const result = await answerCodebaseQuestion({
       repository,
-      token,
       question,
       history: input.history,
+      loadLegacyFile: async (path) => {
+        legacyToken ??= requireRepositoryToken(repository.userId, repository.owner, repository.name).catch(() => null);
+        const token = await legacyToken;
+        return token ? getGitHubFileContent(token, repository.owner, repository.name, path) : null;
+      },
     });
 
     if ("empty" in result) {
       await refundUsage(billedUserId, "chats");
       return ok({
-        answer:
-          "I could not find any indexed code for this repository yet. Use **Re-index** to build the code index, then ask again in a few minutes.",
+        answer: hasRole(access.role, "OWNER")
+          ? "No searchable code was found for this repository. Use **Re-index**, then ask again when indexing is ready."
+          : "No searchable code was found for this repository. Ask the repository owner to re-index it.",
         sources: [],
         indexed: false,
       });
@@ -73,8 +83,11 @@ export async function askCodebase(input: {
     if (error instanceof QuotaExceededError) return fail(error);
 
     if (billedUserId) await refundUsage(billedUserId, "chats");
-    console.error("askCodebase failed:", error);
-    return fail(error, "The assistant could not answer right now. Please try again.");
+    console.error("[codebase-chat] Question failed", {
+      type: error instanceof Error ? error.constructor.name : typeof error,
+      cause: error instanceof Error && error.cause instanceof Error ? error.cause.name : undefined,
+    });
+    return fail(error instanceof CodebaseAnswerError ? error : null, "The assistant could not answer right now. Please try again.");
   }
 }
 
@@ -94,6 +107,7 @@ export async function reindexRepository(repositoryId: string): Promise<ActionRes
 
     return queued ? ok(null) : fail(new Error("Could not queue indexing for this repository. Refresh and try again."));
   } catch (error) {
-    return fail(error, "Could not start indexing.");
+    console.error("[codebase-chat] Could not queue indexing", { type: error instanceof Error ? error.name : typeof error });
+    return fail(null, "Could not queue indexing. Check that the indexing worker is available and try again.");
   }
 }

@@ -3,6 +3,7 @@ import { consumeUsage, QuotaExceededError, refundUsage } from "@/module/billing/
 import { reviewPullRequest } from "@/module/ai/actions";
 import { answerCodebaseQuestion } from "@/module/chat/lib/answer";
 import {
+  getGitHubFileContent,
   getPullRequestDiff,
   getReviewCommentBody,
   postPlainComment,
@@ -143,7 +144,7 @@ export async function handleCommentEvent(
       owner: { equals: payload.repository.owner.login, mode: "insensitive" },
       name: { equals: payload.repository.name, mode: "insensitive" },
     },
-    select: { id: true, userId: true, owner: true, name: true, fullName: true },
+    select: { id: true, userId: true, owner: true, name: true, fullName: true, indexRevision: true },
   });
   if (!repository) return;
 
@@ -208,7 +209,14 @@ export async function handleCommentEvent(
 
         await consumeUsage(repository.userId, "chats");
 
-        const result = await answerCodebaseQuestion({ repository, token, question });
+        const result = await answerCodebaseQuestion({
+          repository,
+          question,
+          loadLegacyFile: (path) => getGitHubFileContent(token, owner, name, path),
+        }).catch(async (error: unknown) => {
+          await refundUsage(repository.userId, "chats");
+          throw error;
+        });
         if ("empty" in result) {
           await refundUsage(repository.userId, "chats");
           await reply("This repository has not been indexed yet. Re-index it from the RepoPilot dashboard and try again.");

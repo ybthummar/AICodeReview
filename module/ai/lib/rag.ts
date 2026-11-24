@@ -16,10 +16,10 @@ import type { CodeMetadata } from "@/types/ast/type";
 
 const EMBEDDING_MODEL_ID = "gemini-embedding-001";
 const EMBED_BATCH_SIZE = 50;
-const UPSERT_BATCH_SIZE = 50;
+const UPSERT_BATCH_BYTES = 1_800_000;
 const PARSE_CONCURRENCY = 5;
 const MAX_ID_LENGTH = 500;
-const MAX_FILE_CHARS = 8000;
+const MAX_FILE_CHARS = 6000;
 const FILE_CHUNK_OVERLAP = 500;
 const MAX_SYMBOL_CHARS = 2000;
 
@@ -91,22 +91,23 @@ interface PendingVector {
   metadata: CodeMetadata;
 }
 
-function splitFileIntoChunks(content: string): string[] {
-  if (!content) return [];
-
-  const chunks: string[] = [];
+function splitFileIntoChunks(content: string): { text: string; startLine: number }[] {
+  const chunks: { text: string; startLine: number }[] = [];
   let start = 0;
+  let startLine = 1;
 
   while (start < content.length) {
     let end = Math.min(start + MAX_FILE_CHARS, content.length);
     if (end < content.length) {
-      const lineEnd = content.lastIndexOf("\n", end);
+      const lineEnd = content.lastIndexOf("\n", end - 1);
       if (lineEnd + 1 > start + FILE_CHUNK_OVERLAP) end = lineEnd + 1;
     }
 
-    chunks.push(content.slice(start, end));
+    chunks.push({ text: content.slice(start, end), startLine });
     if (end === content.length) break;
-    start = end - FILE_CHUNK_OVERLAP;
+    const nextStart = end - FILE_CHUNK_OVERLAP;
+    startLine += content.slice(start, nextStart).split("\n").length - 1;
+    start = nextStart;
   }
 
   return chunks;
@@ -210,7 +211,7 @@ export async function indexCodebaseBatch(
       const symbols = await extractSymbols(file.content, ext, file.path);
 
       const chunks = splitFileIntoChunks(file.content);
-      chunks.forEach((chunk, index) => {
+      chunks.forEach(({ text: chunk, startLine }, index) => {
         const text = `File: ${file.path} (chunk ${index + 1})\n\n${chunk}`;
         const id = vectorId(repoId, file.path, `__file_chunk__${index + 1}`);
         pending.set(id, {
@@ -219,7 +220,8 @@ export async function indexCodebaseBatch(
           metadata: {
             repoId,
             path: file.path,
-            content: chunk.slice(0, 1500),
+            content: chunk,
+            startLine,
             type: "file",
           },
         });
@@ -242,7 +244,7 @@ export async function indexCodebaseBatch(
             symbolType: symbol.type,
             startLine: symbol.startLine,
             endLine: symbol.endLine,
-            content: symbol.code.slice(0, 1500),
+            content: symbol.code.slice(0, MAX_SYMBOL_CHARS),
           },
         });
       }
@@ -260,11 +262,22 @@ export async function indexCodebaseBatch(
     const embeddings = await generateEmbeddings(batch.map((item) => item.text), 0);
     embeddingMs += performance.now() - embeddingStarted;
     const vectors = batch.map(({ id, metadata }, index) => ({ id, values: embeddings[index], metadata }));
-    for (let j = 0; j < vectors.length; j += UPSERT_BATCH_SIZE) {
+    let pendingUpsert: typeof vectors = [];
+    let bytes = 0;
+    const upsert = async () => {
       const upsertStarted = performance.now();
-      await upsertPineconeDocuments(vectors.slice(j, j + UPSERT_BATCH_SIZE));
+      await upsertPineconeDocuments(pendingUpsert);
       upsertMs += performance.now() - upsertStarted;
+      pendingUpsert = [];
+      bytes = 0;
+    };
+    for (const vector of vectors) {
+      const vectorBytes = Buffer.byteLength(JSON.stringify(vector)) + 1;
+      if (pendingUpsert.length && bytes + vectorBytes > UPSERT_BATCH_BYTES) await upsert();
+      pendingUpsert.push(vector);
+      bytes += vectorBytes;
     }
+    if (pendingUpsert.length) await upsert();
   }
 
   console.info("[repository-index-batch]", {
@@ -277,22 +290,28 @@ export async function indexCodebaseBatch(
   return { indexed: entries.length };
 }
 
+type PublishedIndex = { fullName: string; indexRevision: string | null };
+
 export async function retrieveContext(
   query: string,
-  repoId: string,
+  source: string | PublishedIndex,
   topK: number = 10
 ) {
   const [embedding, repository] = await Promise.all([
     generateEmbedding(query),
-    prisma.repository.findFirst({
-      where: { fullName: { equals: repoId, mode: "insensitive" } },
-      select: { fullName: true, indexRevision: true },
-    }),
+    typeof source === "string"
+      ? prisma.repository.findFirst({
+          where: { fullName: { equals: source, mode: "insensitive" } },
+          select: { fullName: true, indexRevision: true },
+        })
+      : source,
   ]);
-  const indexKey = repositoryIndexKey(repository?.fullName ?? repoId, repository?.indexRevision);
+  const fullName = typeof source === "string" ? source : source.fullName;
+  const indexKey = repositoryIndexKey(repository?.fullName ?? fullName, repository?.indexRevision);
   const results = await searchPineconeDocuments(embedding, indexKey, topK);
 
   return results.matches
+    .filter((match) => match.repoId === indexKey)
     .map(stripSearchFields)
     .filter(isCodeMetadata);
 }

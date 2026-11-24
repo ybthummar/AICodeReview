@@ -55,11 +55,13 @@ export default function ChatPage() {
   const repositoriesQuery = useAccessibleRepositories();
 
   const repositories = repositoriesQuery.data ?? [];
-  const selected = repositories.find((repository) => repository.id === selectedId) ?? repositories[0];
+  const selected = repositories.find((repository) => repository.id === selectedId)
+    ?? repositories.find((repository) => repository.canAsk)
+    ?? repositories[0];
   const repositoryId = selected?.id ?? "";
   const messages = threads[repositoryId] ?? EMPTY_THREAD;
   const indexing = indexInProgress(selected?.indexStatus ?? null);
-  const canAsk = selected?.canAsk ?? false;
+  const canAsk = Boolean(selected && (selected.canAsk || selected.indexStatus === null || selected.indexStatus === "failed"));
 
   const ask = useMutation({
     mutationFn: (request: Parameters<typeof askCodebase>[0]) => askCodebase(request),
@@ -87,7 +89,8 @@ export default function ChatPage() {
     onError: () => toast.error("Could not queue a re-index. Please try again."),
   });
 
-  const currentRequest = ask.variables?.repositoryId === repositoryId;
+  const lastRequest = ask.variables;
+  const currentRequest = lastRequest?.repositoryId === repositoryId;
   const answering = currentRequest && ask.isPending;
   const askError = currentRequest && (ask.error
     ? "The assistant is unavailable right now. Please try again."
@@ -164,19 +167,19 @@ export default function ChatPage() {
             </Button>
           )}
         </div>
-        {selected && (indexing || !canAsk || selected.indexStatus === "failed") && (
+        {selected && (indexing || selected.indexStatus !== "ready") && (
           <div className="border-b border-slate-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-900 sm:px-6" role="status">
             {indexing
               ? `Indexing ${selected.fullName}${selected.indexFilesTotal === null
                 ? " — preparing repository files..."
                 : ` — ${Math.min(selected.indexFilesDone, selected.indexFilesTotal)} of ${selected.indexFilesTotal} files processed.`}${canAsk ? " Chat can still use the previous index." : ""}`
               : selected.indexStatus === "failed"
-                ? (canAsk ? "Re-indexing failed. Chat is using the previous index." : "Indexing failed. Re-index the repository to try again.")
+                ? (selected.canAsk ? "Re-indexing failed. Chat is using the previous index." : "Indexing failed. Re-index the repository to try again.")
                 : selected.indexStatus === "empty"
                   ? "Indexing finished, but no indexable files were found."
-                    : selected.role === "OWNER"
-                      ? "Indexing has not started yet. Use Re-index to begin."
-                      : "Indexing has not started yet. Ask the repository owner to re-index it."}
+                  : selected.role === "OWNER"
+                    ? "This repository has no recorded indexing status. Ask a question to use an existing index, or use Re-index to build one."
+                    : "This repository has no recorded indexing status. Ask a question to check for an existing index."}
           </div>
         )}
         <div ref={transcriptRef} role="log" aria-label="Codebase conversation" className="min-h-64 max-h-[max(19rem,calc(100dvh-21rem))] flex-1 space-y-5 overflow-y-auto overscroll-contain p-4 sm:p-6">
@@ -287,7 +290,12 @@ export default function ChatPage() {
           )}
         </div>
 
-        {askError && <p role="alert" className="border-t border-red-100 bg-red-50 px-4 py-2.5 text-sm text-red-800">{askError}</p>}
+        {askError && (
+          <div role="alert" className="flex flex-wrap items-center gap-3 border-t border-red-100 bg-red-50 px-4 py-2.5 text-sm text-red-800">
+            <span>{askError}</span>
+            {lastRequest && <Button type="button" variant="outline" size="sm" disabled={ask.isPending} onClick={() => ask.mutate(lastRequest)}>Retry question</Button>}
+          </div>
+        )}
         {ask.isPending && !currentRequest && (
           <p role="status" className="border-t border-slate-200 px-4 py-2.5 text-sm text-slate-600">A question is running in another repository.</p>
         )}
