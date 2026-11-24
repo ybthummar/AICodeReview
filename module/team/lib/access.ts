@@ -97,10 +97,11 @@ export async function requireRepositoryAccess(
 export async function getGitHubTokenForUser(userId: string): Promise<string | null> {
   const account = await prisma.account.findFirst({
     where: { userId, providerId: "github", accessToken: { not: null } },
+    orderBy: { updatedAt: "desc" },
     select: { accessToken: true },
   });
 
-  return account?.accessToken ?? null;
+  return account?.accessToken?.trim() || null;
 }
 
 export async function requireRepositoryToken(

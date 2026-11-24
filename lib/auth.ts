@@ -48,6 +48,7 @@ export const legacyAuth = betterAuth({
       clientId: githubClientId || "",
       clientSecret: githubClientSecret || "",
       scope: ["repo"],
+      disableImplicitSignUp: true,
     },
   },
   trustedOrigins: [

@@ -4,6 +4,7 @@ import { isAdminUser } from "@/lib/admin";
 import prisma from "@/lib/db";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
+import { RequestError } from "octokit";
 import { fail, ok, type ActionResult } from "@/lib/action-result";
 import { isProActive } from "@/lib/subscription";
 import {
@@ -14,34 +15,78 @@ import {
 import { hasInstallationForAccount } from "@/module/github/lib/app";
 import { queueRepositoryIndex } from "@/module/repository/lib/index-jobs";
 import { recordAudit } from "@/module/audit/lib/audit";
+import { getGitHubTokenForUser } from "@/module/team/lib/access";
+import type { RepositoryFetchResult } from "@/types/repository/types";
 import { revalidatePath } from "next/cache";
 
 export const fetchRepositories = async (
-  page: number = 1,
-  perPage: number = 10
-) => {
-  const session = await auth.api.getSession({
-    headers: await headers(),
-  });
+  page = 1,
+  perPage = 10,
+): Promise<RepositoryFetchResult> => {
+  try {
+    const session = await auth.api.getSession({ headers: await headers() });
+    if (!session?.user) {
+      return { ok: false, code: "unauthorized", message: "Sign in to load your repositories." };
+    }
 
-  if (!session) {
-    throw new Error("Unauthorized");
+    if (!Number.isSafeInteger(page) || page < 1 || !Number.isInteger(perPage) || perPage < 1 || perPage > 100) {
+      return { ok: false, code: "unavailable", message: "This repository page could not be loaded. Refresh the page and try again." };
+    }
+
+    const userId = session.user.id;
+    const token = await getGitHubTokenForUser(userId);
+    if (!token) {
+      return { ok: false, code: "github_auth_required", message: "Authorize GitHub to load the repositories available to your account." };
+    }
+
+    const { repositories, hasNextPage, needsRepoScope } = await getRepositories(token, page, perPage);
+    const connected = repositories.length > 0
+      ? await prisma.repository.findMany({
+          where: { userId, githubId: { in: repositories.map((repo) => BigInt(repo.id)) } },
+          select: { githubId: true },
+        })
+      : [];
+    const connectedIds = new Set(connected.map((repo) => repo.githubId));
+
+    return {
+      ok: true,
+      hasNextPage,
+      needsRepoScope,
+      repositories: repositories.map((repo) => ({
+        id: repo.id,
+        name: repo.name,
+        full_name: repo.full_name,
+        description: repo.description,
+        html_url: repo.html_url,
+        stargazers_count: repo.stargazers_count,
+        language: repo.language,
+        topics: repo.topics,
+        isConnected: connectedIds.has(BigInt(repo.id)),
+      })),
+    };
+  } catch (error) {
+    if (error instanceof RequestError) {
+      const responseHeaders = error.response?.headers;
+      if (error.status === 401) {
+        return { ok: false, code: "github_auth_required", message: "GitHub rejected your saved access. Reconnect your GitHub account to load repositories." };
+      }
+      if (error.status === 429 || (error.status === 403 && (
+        responseHeaders?.["x-ratelimit-remaining"] === "0" ||
+        responseHeaders?.["retry-after"] || /rate limit/i.test(error.message)
+      ))) {
+        return { ok: false, code: "github_rate_limited", message: "GitHub is limiting repository requests. Wait before trying again." };
+      }
+      if (error.status === 403) {
+        return { ok: false, code: "github_forbidden", message: "GitHub blocked repository access. Reconnect GitHub and check whether your organization requires OAuth app approval or SSO authorization." };
+      }
+    }
+
+    console.error("[repository] Could not load repositories", {
+      type: error instanceof Error ? error.name : typeof error,
+      status: error instanceof RequestError ? error.status : undefined,
+    });
+    return { ok: false, code: "unavailable", message: "Could not load repositories right now. Please try again." };
   }
-
-  const githubRepos = await getRepositories(page, perPage);
-
-  const dbRepos = await prisma.repository.findMany({
-    where: {
-      userId: session.user.id,
-    },
-  });
-
-  const connectedReposIds = new Set(dbRepos.map((repo) => repo.githubId));
-
-  return githubRepos.map((repo) => ({
-    ...repo,
-    isConnected: connectedReposIds.has(BigInt(repo.id)),
-  }));
 };
 
 export type WebhookMode = "registered" | "app" | "failed";

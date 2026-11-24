@@ -1,9 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Octokit } from "octokit";
 import { auth } from "@/lib/auth";
-import prisma from "@/lib/db";
 import { headers } from "next/headers";
 import { BOT_MARKER } from "@/module/github/lib/markers";
+import { getGitHubTokenForUser } from "@/module/team/lib/access";
 import {
   isIndexablePath,
   MAX_INDEXED_FILE_BYTES,
@@ -42,18 +42,12 @@ export const getGitHubToken = async () => {
     throw new Error("No session found");
   }
 
-  const account = await prisma.account.findFirst({
-    where: {
-      userId: session.user.id,
-      providerId: "github",
-    },
-  });
-
-  if (!account) {
+  const token = await getGitHubTokenForUser(session.user.id);
+  if (!token) {
     throw new Error("No GitHub account linked");
   }
 
-  return account.accessToken;
+  return token;
 };
 
 export async function fetchUserContribution(
@@ -91,24 +85,31 @@ export async function fetchUserContribution(
 }
 
 export const getRepositories = async (
-  page: number = 1,
-  perPage: number = 10
+  token: string,
+  page: number,
+  perPage: number,
 ) => {
-  const token = await getGitHubToken();
-
   const octokit = new Octokit({
     auth: token,
+    throttle: { enabled: false },
+    retry: { enabled: false },
   });
 
-  const { data } = await octokit.rest.repos.listForAuthenticatedUser({
+  const { data, headers } = await octokit.rest.repos.listForAuthenticatedUser({
     sort: "updated",
     direction: "desc",
     visibility: "all",
     per_page: perPage,
-    page: page,
+    page,
+    request: { signal: AbortSignal.timeout(15_000) },
   });
 
-  return data;
+  const scopes = headers["x-oauth-scopes"]?.split(",").map((scope) => scope.trim());
+  return {
+    repositories: data,
+    hasNextPage: /\brel="next"/.test(headers.link ?? ""),
+    needsRepoScope: scopes !== undefined && !scopes.includes("repo"),
+  };
 };
 
 const WEBHOOK_EVENTS = ["pull_request", "issue_comment", "pull_request_review_comment"] as const;

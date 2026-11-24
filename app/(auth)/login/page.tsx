@@ -10,6 +10,7 @@ export default async function LoginPage({ searchParams }: {
     error?: string | string[];
     state?: string | string[];
     provider?: string | string[];
+    github_reconnect?: string;
   }>;
 }) {
   const query = await searchParams;
@@ -22,13 +23,15 @@ export default async function LoginPage({ searchParams }: {
     error ??= "session_lookup_failed";
     return null;
   });
-  if (session) redirect("/dashboard");
+  const reconnectGitHub = query.github_reconnect === "1" || Boolean(session && error);
+  if (session && !reconnectGitHub) redirect("/dashboard");
   return (
     <LoginUI
       authOrigin={authOrigin}
       initialError={error}
       initialGoogleError={isGoogleError}
-      emailAuthEnabled={isNeonAuthConfigured()}
+      emailAuthEnabled={!reconnectGitHub && isNeonAuthConfigured()}
+      reconnectGitHub={reconnectGitHub}
     />
   );
 }

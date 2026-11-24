@@ -1,6 +1,7 @@
 "use client";
 
 import type React from "react";
+import Link from "next/link";
 
 import {
   Card,
@@ -23,7 +24,8 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { useState } from "react";
-import { useRepositories } from "@/module/repository/hooks/use-repositories";
+import { GITHUB_RECONNECT_PATH } from "@/module/auth/lib/github-sign-in";
+import { RepositoryFetchError, useRepositories } from "@/module/repository/hooks/use-repositories";
 import { useConnectRepository } from "@/module/repository/hooks/use-connect-repository";
 import type { Repository, RepositoryCardProps } from "@/types/repository/types";
 
@@ -169,14 +171,46 @@ const RepositoryCard: React.FC<RepositoryCardProps> = ({
   );
 };
 
+function RepositoryLoadRecovery({ error, retry, loading }: {
+  error: Error | null;
+  retry: () => void;
+  loading: boolean;
+}) {
+  const code = error instanceof RepositoryFetchError ? error.code : undefined;
+
+  return (
+    <div className="space-y-3">
+      <p role="alert" className="text-gray-600 text-sm leading-relaxed">
+        {error instanceof RepositoryFetchError ? error.message : "Could not load repositories right now. Please try again."}
+      </p>
+      {code === "github_auth_required" || code === "github_forbidden" ? (
+        <Button asChild>
+          <Link href={GITHUB_RECONNECT_PATH}>Authorize GitHub</Link>
+        </Button>
+      ) : code === "unauthorized" ? (
+        <Button asChild>
+          <Link href="/login">Sign in</Link>
+        </Button>
+      ) : (
+        <Button onClick={retry} disabled={loading}>
+          {loading ? "Retrying..." : "Try Again"}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function RepositoryPage() {
   const {
     data,
+    error,
     isLoading,
     isError,
     fetchNextPage,
     hasNextPage,
+    isFetching,
     isFetchingNextPage,
+    isFetchNextPageError,
     refetch,
     isRefetching,
   } = useRepositories();
@@ -188,12 +222,14 @@ function RepositoryPage() {
     null
   );
 
-  const allRepositories: Repository[] = data?.pages.flat() || [];
+  const allRepositories = Array.from(new Map(
+    data?.pages.flatMap(({ repositories }) => repositories.map((repo) => [repo.id, repo] as const)),
+  ).values());
+  const needsRepoScope = data?.pages[0]?.needsRepoScope;
+  const searchTerm = searchQuery.trim().toLowerCase();
 
   const filteredRepositories = allRepositories.filter(
-    (repo: Repository) =>
-      repo.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      repo.full_name.toLowerCase().includes(searchQuery.toLowerCase())
+    (repo) => repo.full_name.toLowerCase().includes(searchTerm)
   );
 
   const handleRegister = async (repo: Repository) => {
@@ -229,7 +265,7 @@ function RepositoryPage() {
     );
   }
 
-  if (isError) {
+  if (isError && !data) {
     return (
       <div className="p-4 sm:p-6 lg:p-8 from-white via-blue-50 to-white min-h-screen flex items-center justify-center">
         <Card className="max-w-md mx-auto shadow-lg p-8 bg-white border border-blue-100">
@@ -240,24 +276,7 @@ function RepositoryPage() {
             <h2 className="text-2xl font-semibold text-gray-900">
               Unable to Load Repositories
             </h2>
-            <p className="text-gray-600 text-sm leading-relaxed">
-              Failed to fetch data from GitHub. Please check your connection and
-              permissions, then try again.
-            </p>
-            <Button
-              onClick={() => refetch()}
-              disabled={isRefetching}
-              className="bg-blue-600 hover:bg-blue-700 text-white w-full mt-4"
-            >
-              {isRefetching ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Retrying...
-                </>
-              ) : (
-                "Try Again"
-              )}
-            </Button>
+            <RepositoryLoadRecovery error={error} retry={() => refetch()} loading={isFetching} />
           </div>
         </Card>
       </div>
@@ -279,7 +298,7 @@ function RepositoryPage() {
           <Button
             variant="outline"
             onClick={() => refetch()}
-            disabled={isRefetching}
+            disabled={isFetching}
             className="text-blue-600 border-blue-300 hover:bg-blue-50 hover:border-blue-400 whitespace-nowrap bg-white flex items-center"
           >
             <RefreshCw className={`mr-2 h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
@@ -290,13 +309,23 @@ function RepositoryPage() {
         <div className="relative max-w-2xl">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-blue-400" />
           <Input
-            placeholder={`Search ${allRepositories.length} repositories...`}
+            aria-label="Search loaded repositories"
+            placeholder={`Search ${allRepositories.length} loaded repositories...`}
             className="pl-12 pr-4 py-2.5 text-base rounded-lg border border-blue-200 bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all placeholder:text-gray-500"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
       </div>
+
+      {needsRepoScope && (
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-950">
+          <p>GitHub has granted limited repository access. Authorize GitHub again to include private repositories.</p>
+          <Button asChild variant="outline">
+            <Link href={GITHUB_RECONNECT_PATH}>Authorize GitHub</Link>
+          </Button>
+        </div>
+      )}
 
       {/* Repository Grid */}
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -315,22 +344,30 @@ function RepositoryPage() {
               <Search className="w-10 h-10 text-blue-400" />
             </div>
             <p className="text-xl font-semibold text-gray-900 mb-2">
-              {searchQuery ? "No repositories found" : "No repositories yet"}
+              {searchTerm ? "No matching repositories loaded" : "No repositories yet"}
             </p>
             <p className="text-gray-600 text-sm">
-              {searchQuery
-                ? `No results for "${searchQuery}". Try a different search.`
-                : "Link your GitHub account to get started."}
+              {searchTerm
+                ? hasNextPage ? "Load more repositories or try a different search." : "Try a different search."
+                : "GitHub returned no repositories for this account."}
             </p>
           </div>
         )}
       </div>
 
-      <div className="mt-12 flex justify-center">
-        {hasNextPage && (
+      <div className="mt-12 flex flex-col items-center gap-4 text-center">
+        {isError && (
+          <RepositoryLoadRecovery
+            error={error}
+            retry={() => isFetchNextPageError ? fetchNextPage() : refetch()}
+            loading={isFetching}
+          />
+        )}
+
+        {hasNextPage && !isError && (
           <Button
             onClick={() => fetchNextPage()}
-            disabled={isFetchingNextPage}
+            disabled={isFetching}
             className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5"
           >
             {isFetchingNextPage ? (
@@ -344,7 +381,7 @@ function RepositoryPage() {
           </Button>
         )}
 
-        {!hasNextPage && allRepositories.length > 0 && (
+        {!hasNextPage && !isError && allRepositories.length > 0 && (
           <p className="text-sm text-gray-400">All repositories loaded</p>
         )}
       </div>

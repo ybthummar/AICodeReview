@@ -1,3 +1,5 @@
+export const GITHUB_RECONNECT_PATH = "/login?github_reconnect=1";
+
 const messages = {
   login_origin_mismatch: "This page and the configured GitHub callback are on different origins. Start sign-in on the configured site so your browser can return the verification cookie.",
   invalid_origin: "RepoPilot rejected the sign-in origin. Open the configured site and check that BETTER_AUTH_URL matches its protocol, hostname and port.",
@@ -16,6 +18,7 @@ const messages = {
   unverified_user_email: "GitHub requires a verified primary email for this sign-in. Verify your primary email in GitHub, then retry.",
   application_suspended: "GitHub has suspended this OAuth app. The site operator should check its status in GitHub.",
   account_not_linked: "RepoPilot could not link this GitHub account. Check your verified GitHub email or contact the site operator about the existing account.",
+  signup_disabled: "Use a GitHub account already linked to RepoPilot or one with the same verified email as your RepoPilot account.",
   unable_to_create_user: "RepoPilot could not save your account after GitHub authorization. The site operator should check the database and its migrations.",
   unable_to_create_session: "RepoPilot could not save your sign-in session. The site operator should check database availability and session table permissions.",
   database_unavailable: "RepoPilot could not connect to its sign-in database. The site operator should check DATABASE_URL and database availability.",

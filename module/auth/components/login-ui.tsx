@@ -3,14 +3,16 @@
 import { useState, type FormEvent } from "react";
 import { Eye, EyeOff, Github, LockKeyhole, Mail, Rat, ShieldCheck, UserRound, GitPullRequest, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { neonGetSession, neonSignIn, neonSignUp, signIn } from "@/lib/auth-client";
-import { signInCode, signInMessage, type GitHubSignInCode } from "@/module/auth/lib/github-sign-in";
+import { GITHUB_RECONNECT_PATH, signInCode, signInMessage, type GitHubSignInCode } from "@/module/auth/lib/github-sign-in";
 
-export default function LoginPage({ authOrigin, initialError, initialGoogleError, emailAuthEnabled }: {
+export default function LoginPage({ authOrigin, initialError, initialGoogleError, emailAuthEnabled, reconnectGitHub }: {
   authOrigin: string;
   initialError: GitHubSignInCode | null;
   initialGoogleError: boolean;
   emailAuthEnabled: boolean;
+  reconnectGitHub: boolean;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -37,8 +39,9 @@ export default function LoginPage({ authOrigin, initialError, initialGoogleError
     try {
       const { data, error } = await signIn.social({
         provider: "github",
-        callbackURL: "/dashboard",
-        errorCallbackURL: "/login",
+        callbackURL: reconnectGitHub ? "/dashboard/repositories" : "/dashboard",
+        errorCallbackURL: reconnectGitHub ? GITHUB_RECONNECT_PATH : "/login",
+        requestSignUp: !reconnectGitHub,
       });
       if (error || !data?.url) {
         setGithubError(signInCode(error?.code, "sign-in", error?.status));
@@ -139,12 +142,14 @@ export default function LoginPage({ authOrigin, initialError, initialGoogleError
 
           <div className="mb-6 text-center animate-fade-in-delay">
             <h2 className="text-xl font-semibold text-gray-900">
-              {emailAuthEnabled && emailMode === "signUp" ? "Create your account" : "Welcome back"}
+              {reconnectGitHub ? "Authorize GitHub" : emailAuthEnabled && emailMode === "signUp" ? "Create your account" : "Welcome back"}
             </h2>
             <p className="mt-1 text-sm text-gray-500">
-              {emailAuthEnabled
-                ? "Continue with GitHub, Google, or email."
-                : "Use GitHub sign-in to connect and review your repositories."}
+              {reconnectGitHub
+                ? "Continue with the GitHub account you linked before, or use the same verified email as your RepoPilot account."
+                : emailAuthEnabled
+                  ? "Continue with GitHub, Google, or email."
+                  : "Use GitHub sign-in to connect and review your repositories."}
             </p>
           </div>
 
@@ -168,7 +173,7 @@ export default function LoginPage({ authOrigin, initialError, initialGoogleError
             <div role="alert" className="mt-3 space-y-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
               <p>{signInMessage(githubError)}</p>
               {githubError === "login_origin_mismatch" && (
-                <a href={`${authOrigin}/login`} className="block break-all font-medium underline">
+                <a href={`${authOrigin}${reconnectGitHub ? GITHUB_RECONNECT_PATH : "/login"}`} className="block break-all font-medium underline">
                   Continue on {authOrigin}
                 </a>
               )}
@@ -177,6 +182,12 @@ export default function LoginPage({ authOrigin, initialError, initialGoogleError
               )}
               <p className="text-xs">Error code <code>{githubError}</code></p>
             </div>
+          )}
+
+          {reconnectGitHub && (
+            <Link href="/dashboard/repositories" className="mt-4 block text-center text-sm font-medium text-blue-700 hover:underline">
+              Back to repositories
+            </Link>
           )}
 
           {emailAuthEnabled && (

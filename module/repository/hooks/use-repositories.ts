@@ -1,22 +1,27 @@
-"use client"
+"use client";
 
-import { useInfiniteQuery } from "@tanstack/react-query"
-import { fetchRepositories } from "../actions"
+import { useInfiniteQuery } from "@tanstack/react-query";
+import type { RepositoryFetchErrorCode } from "@/types/repository/types";
+import { fetchRepositories } from "../actions";
 
-export const useRepositories = () => {
-    return useInfiniteQuery({
-        queryKey: ["repositories"],
-        queryFn: async ({pageParam = 1}) => {
-            const data = await fetchRepositories(pageParam, 10);
-            return data;
-        },
-        getNextPageParam: (lastPage, allPages) => {
-            if (lastPage.length < 10) {
-                return undefined;
-            }
+export class RepositoryFetchError extends Error {
+  constructor(readonly code: RepositoryFetchErrorCode, message: string) {
+    super(message);
+  }
+}
 
-            return allPages.length + 1;
-        },
-        initialPageParam: 1
-    })
+export function useRepositories() {
+  return useInfiniteQuery({
+    queryKey: ["repositories"],
+    queryFn: async ({ pageParam }) => {
+      const result = await fetchRepositories(pageParam);
+      if (!result.ok) throw new RepositoryFetchError(result.code, result.message);
+      return result;
+    },
+    getNextPageParam: (lastPage, _pages, lastPageParam) =>
+      lastPage.hasNextPage ? lastPageParam + 1 : undefined,
+    initialPageParam: 1,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
 }
