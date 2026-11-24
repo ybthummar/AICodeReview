@@ -257,10 +257,21 @@ export async function getRepositoryIndexFiles(
   const { data: repository } = await octokit.rest.repos.get({
     owner, repo, request: { signal: AbortSignal.timeout(15_000) },
   });
+  const candidates = (await readRepositoryTree(octokit, owner, repo, repository.default_branch))
+    .sort((a, b) => a.path.localeCompare(b.path));
+
+  if (candidates.length > MAX_INDEXED_FILES) {
+    console.warn(`Indexing ${MAX_INDEXED_FILES} of ${candidates.length} eligible files in ${owner}/${repo}.`);
+  }
+
+  return candidates.slice(0, MAX_INDEXED_FILES);
+}
+
+async function readRepositoryTree(octokit: Octokit, owner: string, repo: string, treeSha: string) {
   const result = await octokit.rest.git.getTree({
     owner,
     repo,
-    tree_sha: repository.default_branch,
+    tree_sha: treeSha,
     recursive: "true",
     request: { signal: AbortSignal.timeout(20_000) },
   }).catch((error: unknown) => {
@@ -275,18 +286,52 @@ export async function getRepositoryIndexFiles(
     throw new Error(`GitHub returned an incomplete file tree for ${owner}/${repo}.`);
   }
 
-  const candidates = result.data.tree
-    .flatMap(({ type, mode, path, sha, size }) => (
-      type === "blob" && mode !== "120000" && path && sha &&
-      (size ?? 0) <= MAX_INDEXED_FILE_BYTES && isIndexablePath(path) ? [{ path, sha }] : []
-    ))
-    .sort((a, b) => a.path.localeCompare(b.path));
+  return result.data.tree.flatMap(({ type, mode, path, sha, size }) => (
+    type === "blob" && mode !== "120000" && path && sha &&
+    (size ?? 0) <= MAX_INDEXED_FILE_BYTES && isIndexablePath(path) ? [{ path, sha }] : []
+  ));
+}
 
-  if (candidates.length > MAX_INDEXED_FILES) {
-    console.warn(`Indexing ${MAX_INDEXED_FILES} of ${candidates.length} eligible files in ${owner}/${repo}.`);
+export async function openGitHubRepository(
+  token: string | null,
+  connection: { owner: string; name: string; githubId: bigint },
+) {
+  const octokit = new Octokit({
+    auth: token,
+    throttle: { enabled: false },
+    retry: { enabled: false },
+  });
+  const { data: repository } = await octokit.rest.repos.get({
+    owner: connection.owner, repo: connection.name, request: { signal: AbortSignal.timeout(10_000) },
+  });
+  if (BigInt(repository.id) !== connection.githubId) {
+    throw new Error("The GitHub repository no longer matches this connection.");
   }
 
-  return candidates.slice(0, MAX_INDEXED_FILES);
+  const owner = repository.owner.login;
+  const repo = repository.name;
+  const commit = await octokit.rest.repos.getCommit({
+    owner, repo, ref: repository.default_branch, request: { signal: AbortSignal.timeout(10_000) },
+  }).then(({ data }) => data).catch((error: unknown) => {
+    if (error instanceof Error && "status" in error && error.status === 409 && /repository is empty/i.test(error.message)) {
+      return null;
+    }
+    throw error;
+  });
+  if (!commit) return null;
+
+  const files = await readRepositoryTree(octokit, owner, repo, commit.commit.tree.sha);
+  return {
+    fullName: repository.full_name,
+    revision: commit.sha,
+    files,
+    async readFiles(selected: RepositoryIndexFile[]) {
+      const shas = [...new Set(selected.map((file) => file.sha))];
+      const contents = new Map<string, string>();
+      await readRepositoryBlobs(octokit, owner, repo, shas, contents);
+      return filesWithContent(selected, contents);
+    },
+  };
 }
 
 interface IndexBlob {
@@ -345,8 +390,19 @@ export async function getRepositoryIndexFileContents(
   }
 
   // Some GitHub tokens cannot use GraphQL, and large blobs may be truncated.
-  for (let i = 0; i < missing.length; i += BLOB_FETCH_CONCURRENCY) {
-    await Promise.all(missing.slice(i, i + BLOB_FETCH_CONCURRENCY).map(async (sha) => {
+  await readRepositoryBlobs(octokit, owner, repo, missing, contents);
+  return filesWithContent(files, contents);
+}
+
+async function readRepositoryBlobs(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  shas: string[],
+  contents: Map<string, string>,
+) {
+  for (let i = 0; i < shas.length; i += BLOB_FETCH_CONCURRENCY) {
+    await Promise.all(shas.slice(i, i + BLOB_FETCH_CONCURRENCY).map(async (sha) => {
       const { data } = await octokit.rest.git.getBlob({
         owner, repo, file_sha: sha, request: { signal: AbortSignal.timeout(15_000) },
       });
@@ -355,7 +411,9 @@ export async function getRepositoryIndexFileContents(
       if (!content.includes("\0")) contents.set(sha, content);
     }));
   }
+}
 
+function filesWithContent(files: RepositoryIndexFile[], contents: Map<string, string>) {
   return files.flatMap(({ path, sha }) => {
     const content = contents.get(sha);
     return content === undefined ? [] : [{ path, content }];

@@ -56,12 +56,10 @@ export default function ChatPage() {
 
   const repositories = repositoriesQuery.data ?? [];
   const selected = repositories.find((repository) => repository.id === selectedId)
-    ?? repositories.find((repository) => repository.canAsk)
     ?? repositories[0];
   const repositoryId = selected?.id ?? "";
   const messages = threads[repositoryId] ?? EMPTY_THREAD;
   const indexing = indexInProgress(selected?.indexStatus ?? null);
-  const canAsk = Boolean(selected && (selected.canAsk || selected.indexStatus === null || selected.indexStatus === "failed"));
 
   const ask = useMutation({
     mutationFn: (request: Parameters<typeof askCodebase>[0]) => askCodebase(request),
@@ -103,7 +101,7 @@ export default function ChatPage() {
 
   const send = (question: string) => {
     const text = question.trim();
-    if (!text || ask.isPending || !repositoryId || !canAsk) return;
+    if (!text || ask.isPending || !repositoryId) return;
 
     setThreads((previous) => ({
       ...previous,
@@ -127,7 +125,7 @@ export default function ChatPage() {
           </span>
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Ask your codebase</h1>
-            <p className="mt-1 text-sm text-slate-600">Explore indexed code with file and line references.</p>
+            <p className="mt-1 text-sm text-slate-600">Ask about the latest code on your repository’s default branch.</p>
           </div>
         </div>
         <UsageMeter compact kind="chats" />
@@ -167,19 +165,11 @@ export default function ChatPage() {
             </Button>
           )}
         </div>
-        {selected && (indexing || selected.indexStatus !== "ready") && (
+        {selected && indexing && (
           <div className="border-b border-slate-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-900 sm:px-6" role="status">
-            {indexing
-              ? `Indexing ${selected.fullName}${selected.indexFilesTotal === null
-                ? " — preparing repository files..."
-                : ` — ${Math.min(selected.indexFilesDone, selected.indexFilesTotal)} of ${selected.indexFilesTotal} files processed.`}${canAsk ? " Chat can still use the previous index." : ""}`
-              : selected.indexStatus === "failed"
-                ? (selected.canAsk ? "Re-indexing failed. Chat is using the previous index." : "Indexing failed. Re-index the repository to try again.")
-                : selected.indexStatus === "empty"
-                  ? "Indexing finished, but no indexable files were found."
-                  : selected.role === "OWNER"
-                    ? "This repository has no recorded indexing status. Ask a question to use an existing index, or use Re-index to build one."
-                    : "This repository has no recorded indexing status. Ask a question to check for an existing index."}
+            {selected.indexFilesTotal === null
+              ? `Preparing the index for ${selected.fullName}.`
+              : `Indexing ${selected.fullName}. ${Math.min(selected.indexFilesDone, selected.indexFilesTotal)} of ${selected.indexFilesTotal} files processed.`}
           </div>
         )}
         <div ref={transcriptRef} role="log" aria-label="Codebase conversation" className="min-h-64 max-h-[max(19rem,calc(100dvh-21rem))] flex-1 space-y-5 overflow-y-auto overscroll-contain p-4 sm:p-6">
@@ -196,10 +186,6 @@ export default function ChatPage() {
             <div className="flex flex-col items-center gap-3 py-12 text-center text-sm text-slate-700">
               Connect a repository to ask questions about its code.
               <Button asChild variant="outline" size="sm"><Link href="/dashboard/repositories">Connect repository</Link></Button>
-            </div>
-          ) : messages.length === 0 && !canAsk ? (
-            <div className="flex items-center justify-center py-16 text-center text-sm text-slate-600">
-              Questions will be available when repository indexing is ready.
             </div>
           ) : messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-4 py-5 text-center sm:py-8">
@@ -218,7 +204,7 @@ export default function ChatPage() {
                     key={starter}
                     type="button"
                     onClick={() => send(starter)}
-                    disabled={!repositoryId || !canAsk || ask.isPending}
+                    disabled={ask.isPending}
                     className="cursor-pointer rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2.5 text-left text-sm text-slate-700 transition-colors hover:border-blue-300 hover:bg-blue-50/50 focus-visible:outline-2 focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {starter}
@@ -285,7 +271,7 @@ export default function ChatPage() {
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white">
                 <Loader2 className="h-4 w-4 animate-spin" />
               </div>
-              Searching the codebase...
+              Reading repository files from GitHub...
             </div>
           )}
         </div>
@@ -319,13 +305,13 @@ export default function ChatPage() {
             }}
             rows={2}
             maxLength={1000}
-            placeholder={!repositoryId ? "Connect a repository first" : canAsk ? "Ask about this repository" : "Available when indexing is complete"}
-            disabled={!repositoryId || !canAsk}
+            placeholder={repositoryId ? "Ask about this repository" : "Connect a repository first"}
+            disabled={!repositoryId}
             className="min-w-0 flex-1 resize-none rounded-lg border border-slate-300 bg-white px-3 py-2 text-base focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-60 sm:text-sm"
           />
           <Button
             type="submit"
-            disabled={!input.trim() || ask.isPending || !repositoryId || !canAsk}
+            disabled={!input.trim() || ask.isPending || !repositoryId}
             className="h-10 gap-1.5 bg-blue-600 text-white hover:bg-blue-700"
           >
             <Send className="h-4 w-4" /> Ask

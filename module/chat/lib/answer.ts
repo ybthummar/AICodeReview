@@ -24,6 +24,12 @@ export interface ChatAnswer {
   indexed: boolean;
 }
 
+export interface RepositoryContext {
+  fullName: string;
+  revision: string;
+  matches: { path: string; content: string; startLine: number }[];
+}
+
 export class CodebaseAnswerError extends Error {}
 
 export function trimHistory(history: ChatMessage[] | undefined): ChatMessage[] {
@@ -38,6 +44,7 @@ export async function answerCodebaseQuestion(input: {
   repository: { fullName: string; indexRevision: string | null };
   question: string;
   history?: ChatMessage[];
+  loadRepositoryContext?: (query: string) => Promise<RepositoryContext | null>;
   loadLegacyFile?: (path: string) => Promise<string | null>;
 }): Promise<ChatAnswer | { empty: true }> {
   const { repository, question } = input;
@@ -46,10 +53,14 @@ export async function answerCodebaseQuestion(input: {
   const lastUserQuestion = [...history].reverse().find((m) => m.role === "user")?.content;
   const searchQuery = lastUserQuestion ? `${lastUserQuestion}\n${question}` : question;
 
-  const matches = await retrieveContext(searchQuery, repository).catch((cause: unknown) => {
-    throw new CodebaseAnswerError("Could not search the code index. Try again in a moment.", { cause });
-  });
-  const loadLegacyFile = repository.indexRevision === null && !matches.some((match) =>
+  const original = await input.loadRepositoryContext?.(searchQuery);
+  if (original === null) return { empty: true };
+
+  const matches: { path: string; content?: string; startLine?: number; endLine?: number; symbolName?: string }[] =
+    original?.matches ?? await retrieveContext(searchQuery, repository).catch((cause: unknown) => {
+      throw new CodebaseAnswerError("Could not search the code index. Try again in a moment.", { cause });
+    });
+  const loadLegacyFile = !original && repository.indexRevision === null && !matches.some((match) =>
     typeof match.content === "string" && match.content.trim(),
   ) ? input.loadLegacyFile : undefined;
   const legacyFiles = new Map<string, string | null>();
@@ -57,6 +68,8 @@ export async function answerCodebaseQuestion(input: {
   const sections: string[] = [];
   const sources = new Map<string, ChatSource>();
   const paths = new Set<string>();
+  const fullName = original?.fullName ?? repository.fullName;
+  const revision = original?.revision ?? "HEAD";
   let budget = MAX_CONTEXT_CHARS;
 
   for (const match of matches) {
@@ -84,7 +97,7 @@ export async function answerCodebaseQuestion(input: {
     const location = startLine ? `${path}:${startLine}-${endLine}` : path;
     const anchor = startLine ? `#L${startLine}-L${endLine}` : "";
     const encodedPath = path.split("/").map(encodeURIComponent).join("/");
-    const url = `https://github.com/${repository.fullName}/blob/HEAD/${encodedPath}${anchor}`;
+    const url = `https://github.com/${fullName}/blob/${revision}/${encodedPath}${anchor}`;
     sections.push(`### ${location}${symbolName ? ` (${symbolName})` : ""}\n\`\`\`\n${text}\n\`\`\``);
     sources.set(url, { path, startLine, endLine, symbolName, url });
     paths.add(path);
@@ -99,7 +112,7 @@ export async function answerCodebaseQuestion(input: {
 
   const answer = await generateWithFallback(
     `
-You are RepoPilot, an expert engineer answering questions about the GitHub repository ${repository.fullName}.
+You are RepoPilot, an expert engineer answering questions about the GitHub repository ${fullName}.
 
 RULES:
 - Answer using ONLY the code excerpts below. If they do not contain the answer, say what is missing and suggest where to look.
@@ -120,5 +133,5 @@ QUESTION: ${question}
     throw new CodebaseAnswerError("The AI provider could not answer right now. Please try again.", { cause });
   });
 
-  return { answer: answer.trim(), sources: [...sources.values()], indexed: true };
+  return { answer: answer.trim(), sources: [...sources.values()], indexed: !original };
 }

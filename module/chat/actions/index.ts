@@ -10,8 +10,8 @@ import {
   type ChatAnswer,
   type ChatMessage,
 } from "@/module/chat/lib/answer";
-import { findAccessibleRepository, hasRole, requireRepositoryToken } from "@/module/team/lib/access";
-import { getGitHubFileContent } from "@/module/github/lib/github";
+import { loadGitHubRepositoryContext } from "@/module/chat/lib/repository-context";
+import { findAccessibleRepository } from "@/module/team/lib/access";
 import { queueRepositoryIndex } from "@/module/repository/lib/index-jobs";
 
 const MAX_QUESTION_LENGTH = 1000;
@@ -47,7 +47,7 @@ export async function askCodebase(input: {
       return fail(new Error(`Questions are limited to ${MAX_QUESTION_LENGTH} characters.`));
     }
 
-    const access = await findAccessibleRepository(session.user, { id: input.repositoryId });
+    const access = await findAccessibleRepository(session.user, { id: input.repositoryId.trim() });
     if (!access) return fail(new Error("Repository not found or you do not have access."));
     const { repository } = access;
 
@@ -55,24 +55,17 @@ export async function askCodebase(input: {
     await consumeUsage(session.user.id, "chats");
     billedUserId = session.user.id;
 
-    let legacyToken: Promise<string | null> | undefined;
     const result = await answerCodebaseQuestion({
       repository,
       question,
       history: input.history,
-      loadLegacyFile: async (path) => {
-        legacyToken ??= requireRepositoryToken(repository.userId, repository.owner, repository.name).catch(() => null);
-        const token = await legacyToken;
-        return token ? getGitHubFileContent(token, repository.owner, repository.name, path) : null;
-      },
+      loadRepositoryContext: (query) => loadGitHubRepositoryContext(repository, session.user.id, query),
     });
 
     if ("empty" in result) {
       await refundUsage(billedUserId, "chats");
       return ok({
-        answer: hasRole(access.role, "OWNER")
-          ? "No searchable code was found for this repository. Use **Re-index**, then ask again when indexing is ready."
-          : "No searchable code was found for this repository. Ask the repository owner to re-index it.",
+        answer: "No supported source files were found on this repository’s default branch.",
         sources: [],
         indexed: false,
       });
