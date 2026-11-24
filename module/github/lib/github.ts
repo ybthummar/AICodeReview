@@ -88,6 +88,7 @@ export const getRepositories = async (
   token: string,
   page: number,
   perPage: number,
+  search = "",
 ) => {
   const octokit = new Octokit({
     auth: token,
@@ -95,20 +96,41 @@ export const getRepositories = async (
     retry: { enabled: false },
   });
 
-  const { data, headers } = await octokit.rest.repos.listForAuthenticatedUser({
-    sort: "updated",
-    direction: "desc",
-    visibility: "all",
-    per_page: perPage,
-    page,
+  const params = {
+    sort: "updated" as const,
+    direction: "desc" as const,
+    visibility: "all" as const,
     request: { signal: AbortSignal.timeout(15_000) },
+  };
+  const first = await octokit.rest.repos.listForAuthenticatedUser({
+    ...params,
+    per_page: search ? 100 : perPage,
+    page: search ? 1 : page,
   });
-
-  const scopes = headers["x-oauth-scopes"]?.split(",").map((scope) => scope.trim());
-  return {
-    repositories: data,
-    hasNextPage: /\brel="next"/.test(headers.link ?? ""),
+  const hasNext = (link?: string) => /\brel="next"/.test(link ?? "");
+  const scopes = first.headers["x-oauth-scopes"]?.split(",").map((scope) => scope.trim());
+  const sso = first.headers["x-github-sso"];
+  const access = {
     needsRepoScope: scopes !== undefined && !scopes.includes("repo"),
+    restrictedOrganizationAccess: typeof sso === "string" && sso.startsWith("partial-results"),
+  };
+
+  if (!search) {
+    return { ...access, repositories: first.data, hasNextPage: hasNext(first.headers.link) };
+  }
+
+  const offset = (page - 1) * perPage;
+  const matches = first.data.filter((repo) => repo.full_name.toLowerCase().includes(search));
+  let response = first;
+  for (let nextPage = 2; matches.length <= offset + perPage && hasNext(response.headers.link); nextPage++) {
+    response = await octokit.rest.repos.listForAuthenticatedUser({ ...params, per_page: 100, page: nextPage });
+    matches.push(...response.data.filter((repo) => repo.full_name.toLowerCase().includes(search)));
+  }
+
+  return {
+    ...access,
+    repositories: matches.slice(offset, offset + perPage),
+    hasNextPage: matches.length > offset + perPage,
   };
 };
 
@@ -721,49 +743,41 @@ export interface GitHubPullRequest {
   };
 }
 
-export async function getOpenPullRequests(
+export async function listRepositoryPullRequests(
   token: string,
   owner: string,
   repo: string,
-  state: "open" | "closed" | "all" = "all",
-  options: { propagateErrors?: boolean } = {}
 ): Promise<GitHubPullRequest[]> {
-  try {
-    const octokit = new Octokit({ auth: token });
-    const { data } = await octokit.rest.pulls.list({
-      owner,
-      repo,
-      state,
-      sort: "updated",
-      direction: "desc",
-      per_page: 30,
-    });
-
-    return data.map((pr) => ({
-      id: pr.id,
-      number: pr.number,
-      title: pr.title || `PR #${pr.number}`,
-      body: pr.body || null,
-      state: pr.state,
-      html_url: pr.html_url,
-      created_at: pr.created_at,
-      updated_at: pr.updated_at,
-      user: {
-        login: pr.user?.login || "unknown",
-        avatar_url: pr.user?.avatar_url || "",
-      },
-      head: {
-        ref: pr.head?.ref || "unknown",
-      },
-      base: {
-        ref: pr.base?.ref || "main",
-      },
-    }));
-  } catch (error) {
-    if (options.propagateErrors) throw new Error("Could not load pull requests from GitHub.");
-    console.error(`Failed to list pull requests for ${owner}/${repo}:`, error);
-    return [];
+  const octokit = new Octokit({ auth: token, throttle: { enabled: false }, retry: { enabled: false } });
+  const params = {
+    owner,
+    repo,
+    state: "all" as const,
+    sort: "created" as const,
+    direction: "desc" as const,
+    per_page: 100,
+    request: { signal: AbortSignal.timeout(15_000) },
+  };
+  let response = await octokit.rest.pulls.list({ ...params, page: 1 });
+  const requests = [...response.data];
+  for (let page = 2; /\brel="next"/.test(response.headers.link ?? ""); page++) {
+    response = await octokit.rest.pulls.list({ ...params, page });
+    requests.push(...response.data);
   }
+  // GitHub's page boundaries can move when a PR is opened during a fetch.
+  return Array.from(new Map(requests.map((pr) => [pr.number, {
+    id: pr.id,
+    number: pr.number,
+    title: pr.title || `PR #${pr.number}`,
+    body: pr.body || null,
+    state: pr.state,
+    html_url: pr.html_url,
+    created_at: pr.created_at,
+    updated_at: pr.updated_at,
+    user: { login: pr.user?.login || "unknown", avatar_url: pr.user?.avatar_url || "" },
+    head: { ref: pr.head?.ref || "unknown" },
+    base: { ref: pr.base?.ref || "main" },
+  }])).values());
 }
 
 export interface ClosedPullRequest {

@@ -42,6 +42,7 @@ export const useConnectRepository = () => {
 
       queryClient.invalidateQueries({ queryKey: ["repositories"] });
       queryClient.invalidateQueries({ queryKey: ["connected-repositories"] });
+      queryClient.invalidateQueries({ queryKey: ["connected-repos-prs"] });
       queryClient.invalidateQueries({ queryKey: ["accessible-repositories"] });
     },
     onError: (error) => {

@@ -13,15 +13,38 @@ import {
   verifyRepositoryAccess,
 } from "@/module/github/lib/github";
 import { hasInstallationForRepository } from "@/module/github/lib/app";
+import { isGitHubRateLimit } from "@/module/github/lib/read-errors";
 import { queueRepositoryIndex } from "@/module/repository/lib/index-jobs";
 import { recordAudit } from "@/module/audit/lib/audit";
 import { getGitHubTokenForUser } from "@/module/team/lib/access";
-import type { RepositoryFetchResult } from "@/types/repository/types";
+import type { RepositoryFetchIssue, RepositoryFetchResult } from "@/types/repository/types";
 import { revalidatePath } from "next/cache";
+
+async function savedRepositoriesOnFailure(
+  userId: string, page: number, search: string, warning: RepositoryFetchIssue,
+): Promise<RepositoryFetchResult> {
+  if (page !== 1) return { ok: false, ...warning };
+
+  const saved = await prisma.repository.findMany({
+    where: { userId, ...(search ? { fullName: { contains: search, mode: "insensitive" } } : {}) },
+    select: { githubId: true, name: true, fullName: true, url: true },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!saved.length) return { ok: false, ...warning };
+
+  return {
+    ok: true, warning, hasNextPage: false, needsRepoScope: false,
+    repositories: saved.map(({ githubId, name, fullName, url }) => ({
+      id: Number(githubId), name, full_name: fullName, html_url: url,
+      description: null, stargazers_count: null, language: null, isConnected: true,
+    })),
+  };
+}
 
 export const fetchRepositories = async (
   page = 1,
   perPage = 10,
+  query = "",
 ): Promise<RepositoryFetchResult> => {
   try {
     const session = await auth.api.getSession({ headers: await headers() });
@@ -34,12 +57,33 @@ export const fetchRepositories = async (
     }
 
     const userId = session.user.id;
+    const search = typeof query === "string" ? query.trim().toLowerCase().slice(0, 200) : "";
     const token = await getGitHubTokenForUser(userId);
     if (!token) {
-      return { ok: false, code: "github_auth_required", message: "Authorize GitHub to load the repositories available to your account." };
+      return await savedRepositoriesOnFailure(userId, page, search, {
+        code: "github_auth_required", message: "Authorize GitHub to load repositories from your GitHub account.",
+      });
     }
 
-    const { repositories, hasNextPage, needsRepoScope } = await getRepositories(token, page, perPage);
+    let result: Awaited<ReturnType<typeof getRepositories>>;
+    try {
+      result = await getRepositories(token, page, perPage, search);
+    } catch (error) {
+      let issue: RepositoryFetchIssue;
+      if (isGitHubRateLimit(error)) {
+        issue = { code: "github_rate_limited", message: "GitHub is limiting repository requests. Wait before trying again." };
+      } else if (error instanceof RequestError && error.status === 401) {
+        issue = { code: "github_auth_required", message: "GitHub rejected your saved access. Authorize GitHub again to load repositories." };
+      } else if (error instanceof RequestError && error.status === 403) {
+        issue = { code: "github_forbidden", message: "GitHub blocked repository access. Check whether your organization requires OAuth app approval or SSO authorization." };
+      } else {
+        console.error("[repository] GitHub repository fetch failed", { status: error instanceof RequestError ? error.status : undefined });
+        issue = { code: "unavailable", message: "Could not load repositories from GitHub right now. Please try again." };
+      }
+      return await savedRepositoriesOnFailure(userId, page, search, issue);
+    }
+
+    const { repositories, ...pagination } = result;
     const connected = repositories.length > 0
       ? await prisma.repository.findMany({
           where: { userId, githubId: { in: repositories.map((repo) => BigInt(repo.id)) } },
@@ -50,8 +94,7 @@ export const fetchRepositories = async (
 
     return {
       ok: true,
-      hasNextPage,
-      needsRepoScope,
+      ...pagination,
       repositories: repositories.map((repo) => ({
         id: repo.id,
         name: repo.name,
@@ -65,25 +108,8 @@ export const fetchRepositories = async (
       })),
     };
   } catch (error) {
-    if (error instanceof RequestError) {
-      const responseHeaders = error.response?.headers;
-      if (error.status === 401) {
-        return { ok: false, code: "github_auth_required", message: "GitHub rejected your saved access. Reconnect your GitHub account to load repositories." };
-      }
-      if (error.status === 429 || (error.status === 403 && (
-        responseHeaders?.["x-ratelimit-remaining"] === "0" ||
-        responseHeaders?.["retry-after"] || /rate limit/i.test(error.message)
-      ))) {
-        return { ok: false, code: "github_rate_limited", message: "GitHub is limiting repository requests. Wait before trying again." };
-      }
-      if (error.status === 403) {
-        return { ok: false, code: "github_forbidden", message: "GitHub blocked repository access. Reconnect GitHub and check whether your organization requires OAuth app approval or SSO authorization." };
-      }
-    }
-
     console.error("[repository] Could not load repositories", {
       type: error instanceof Error ? error.name : typeof error,
-      status: error instanceof RequestError ? error.status : undefined,
     });
     return { ok: false, code: "unavailable", message: "Could not load repositories right now. Please try again." };
   }

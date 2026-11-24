@@ -9,11 +9,10 @@ import { retrieveContext } from "@/module/ai/lib/rag";
 import {
   getGitHubFileContent,
   getGitHubIssueContext,
-  getOpenPullRequests,
-  getPullRequestDiff,
   listMergedPullRequests,
   updatePullRequest,
 } from "@/module/github/lib/github";
+import { PullRequestLoadError, readRepositoryPullRequest, readRepositoryPullRequests } from "@/module/github/lib/pull-requests";
 import { consumeUsage, QuotaExceededError, refundUsage } from "@/module/billing/lib/usage";
 import { prepareDiff } from "@/module/review/lib/pipeline";
 import { loadReviewConfig } from "@/module/review-rules/lib/load";
@@ -102,8 +101,7 @@ async function loadContext(repositoryId: string, prNumber: number, minimumRole: 
   }
 
   const { repository } = access;
-  const token = await requireRepositoryToken(repository.userId, repository.owner, repository.name);
-  const pr = await getPullRequestDiff(token, repository.owner, repository.name, prNumber);
+  const { token, pr } = await readRepositoryPullRequest(repository, session.user.id, prNumber);
 
   return { session, repository, token, pr };
 }
@@ -117,8 +115,7 @@ export async function getToolkitPullRequests(
     const access = await findAccessibleRepository(session.user, { id: repositoryId });
     if (!access) return fail(new Error("Repository not found"));
 
-    const token = await requireRepositoryToken(access.repository.userId, access.repository.owner, access.repository.name);
-    const pulls = await getOpenPullRequests(token, access.repository.owner, access.repository.name, "all", { propagateErrors: true });
+    const pulls = await readRepositoryPullRequests(access.repository, session.user.id);
 
     return ok(
       pulls.map((pr) => ({
@@ -132,7 +129,7 @@ export async function getToolkitPullRequests(
       }))
     );
   } catch (error) {
-    return fail(error, "Could not load pull requests.");
+    return fail(error instanceof PullRequestLoadError ? error : null, "Could not load pull requests.");
   }
 }
 

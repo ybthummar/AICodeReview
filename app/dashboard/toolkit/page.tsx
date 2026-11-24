@@ -128,6 +128,7 @@ function ToolkitContent() {
     },
     enabled: Boolean(repository) && tool.needsPr,
     staleTime: 30_000,
+    retry: false,
   });
 
   const refreshUsage = () => void queryClient.invalidateQueries({ queryKey: USAGE_QUERY_KEY });

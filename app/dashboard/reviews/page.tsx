@@ -2,6 +2,9 @@
 
 import { useState, useMemo } from "react";
 import { useSession } from "@/lib/auth-client";
+import { GITHUB_RECONNECT_PATH } from "@/module/auth/lib/github-sign-in";
+import { useAccessibleRepositories } from "@/module/team/hooks/use-accessible-repositories";
+import { hasRole } from "@/module/team/lib/roles";
 import { isAdminUser } from "@/lib/admin";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -54,9 +57,7 @@ import {
   getMyFeedback,
   getRepoPullRequests,
   triggerManualReview,
-  type ConnectedRepoPR,
 } from "@/module/review/actions";
-import { getConnectedRepositories } from "@/module/settings/actions";
 import { InsightsPanel, RiskBadge, VerdictBadge } from "@/module/review/components/insights-panel";
 import UsageMeter, { USAGE_QUERY_KEY } from "@/module/billing/components/usage-meter";
 import Link from "next/link";
@@ -369,15 +370,20 @@ export default function ReviewPage() {
 
   // 1. Fetch live Pull Requests from connected repositories (strictly user-wise by default)
   const {
-    data: pullRequests,
+    data: livePRs,
+    error: livePRError,
     isLoading: isLoadingPRs,
     refetch: refetchPRs,
     isRefetching: isRefetchingPRs,
-  } = useQuery<ConnectedRepoPR[]>({
+  } = useQuery({
     queryKey: ["connected-repos-prs", adminScope],
     queryFn: async () => {
-      return await getConnectedReposPullRequests(adminScope);
+      const result = await getConnectedReposPullRequests(adminScope);
+      if (!result.ok) throw new Error(result.error);
+      return result.data;
     },
+    retry: false,
+    refetchOnWindowFocus: false,
     staleTime: 1000 * 30, // 30s
   });
 
@@ -399,26 +405,26 @@ export default function ReviewPage() {
     },
   });
 
-  // 3. Fetch connected repos for the modal dropdown
-  const { data: repos } = useQuery({
-    queryKey: ["connected-repositories-for-review"],
-    queryFn: async () => {
-      return await getConnectedRepositories();
-    },
-  });
+  const reviewRepositories = useAccessibleRepositories();
+  const repos = adminScope === "all" && livePRs
+    ? livePRs.repositories.filter((repo) => repo.canReview)
+    : reviewRepositories.data?.filter((repo) => hasRole(repo.role, "MEMBER"));
 
   // 4. Fetch PRs dynamically for the selected repository inside the modal
-  const { data: modalRepoPRs, isLoading: isLoadingModalPRs } = useQuery({
+  const { data: modalRepoPRs, error: modalPRError, isFetching: isLoadingModalPRs, refetch: refetchModalPRs } = useQuery({
     queryKey: ["modal-repo-prs", selectedRepoFullName],
     queryFn: async () => {
-      if (!selectedRepoFullName) return [];
       const [owner, repo] = selectedRepoFullName.split("/");
-      return await getRepoPullRequests(owner, repo);
+      const result = await getRepoPullRequests(owner, repo);
+      if (!result.ok) throw new Error(result.error);
+      return result.data;
     },
-    enabled: !!selectedRepoFullName,
+    enabled: dialogOpen && !!selectedRepoFullName,
+    retry: false,
   });
 
-  const prList = useMemo(() => pullRequests || [], [pullRequests]);
+  const prList = useMemo(() => livePRs?.pullRequests ?? [], [livePRs]);
+  const prIssues = livePRs?.issues.filter((issue) => selectedRepoFilter === "all" || issue.fullName === selectedRepoFilter) ?? [];
   const reviewList = useMemo(() => reviews || [], [reviews]);
 
   // 5. The signed-in user's finding votes for the completed reviews on screen
@@ -452,10 +458,10 @@ export default function ReviewPage() {
   // Unique repo list for filtering
   const uniqueRepos = useMemo(() => {
     const set = new Set<string>();
-    prList.forEach((pr) => set.add(pr.repoFullName));
+    livePRs?.repositories.forEach((repo) => set.add(repo.fullName));
     reviewList.forEach((r) => set.add(r.repository.fullName));
     return Array.from(set);
-  }, [prList, reviewList]);
+  }, [livePRs, reviewList]);
 
   // Filtered PRs
   const filteredPRs = useMemo(() => {
@@ -496,8 +502,10 @@ export default function ReviewPage() {
   // Refresh both PRs and Reviews
   const handleRefreshAll = async () => {
     toast.info("Syncing latest Pull Requests and AI reviews...");
-    await Promise.all([refetchPRs(), refetchReviews()]);
-    toast.success("Synced successfully!");
+    const [prs, reviews] = await Promise.all([refetchPRs(), refetchReviews()]);
+    if (prs.isError || reviews.isError) toast.error("Could not sync pull requests and reviews.");
+    else if (prs.data?.issues.length) toast.warning("Some GitHub pull requests could not be synced.");
+    else toast.success("Synced successfully!");
   };
 
   // Run AI review for a specific PR
@@ -640,17 +648,21 @@ export default function ReviewPage() {
                       onChange={(e) => {
                         setSelectedRepoFullName(e.target.value);
                         setSelectedPRNumber("");
+                        setCustomPRNumber("");
                       }}
                       className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                       required
                     >
-                      <option value="">-- Choose a connected repository --</option>
+                      <option value="">{reviewRepositories.isLoading ? "Loading repositories…" : "Choose a connected repository"}</option>
                       {repos?.map((r) => (
                         <option key={r.id} value={r.fullName}>
                           {r.fullName}
                         </option>
                       ))}
                     </select>
+                    {reviewRepositories.isError && !repos?.length && (
+                      <p role="alert" className="mt-2 text-xs text-amber-800">Could not load connected repositories. <Button type="button" variant="link" size="sm" onClick={() => void reviewRepositories.refetch()}>Retry</Button></p>
+                    )}
                   </div>
 
                   {selectedRepoFullName && (
@@ -666,6 +678,12 @@ export default function ReviewPage() {
                         )}
                       </div>
 
+                      {modalPRError && (
+                        <div role="alert" className="mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-amber-50 p-2.5 text-xs text-amber-900">
+                          <span>{modalPRError.message}</span>
+                          <Button type="button" size="sm" variant="outline" disabled={isLoadingModalPRs} onClick={() => void refetchModalPRs()}>Retry</Button>
+                        </div>
+                      )}
                       {modalRepoPRs && modalRepoPRs.length > 0 ? (
                         <select
                           value={selectedPRNumber}
@@ -683,7 +701,7 @@ export default function ReviewPage() {
                           ))}
                         </select>
                       ) : (
-                        !isLoadingModalPRs && (
+                        !isLoadingModalPRs && !modalPRError && (
                           <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800">
                             No pull requests returned from GitHub API for this repository. You can manually enter a PR number below.
                           </div>
@@ -877,18 +895,36 @@ export default function ReviewPage() {
       {/* TAB 1: PULL REQUESTS */}
       {activeTab === "prs" && (
         <div className="space-y-4">
+          {(livePRError || prIssues.length > 0) && (
+            <div role="alert" className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+              <p className="font-semibold">{livePRError?.message ?? "GitHub pull requests could not be loaded for these repositories."}</p>
+              {prIssues.length > 0 && (
+                <ul className="space-y-1">
+                  {prIssues.map((issue) => (
+                    <li key={issue.repositoryId}><strong>{issue.fullName}</strong> · {issue.message}</li>
+                  ))}
+                </ul>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" disabled={isSyncing} onClick={handleRefreshAll}>Retry sync</Button>
+                {prIssues.some((issue) => issue.reconnect) && (
+                  <Button size="sm" asChild><Link href={GITHUB_RECONNECT_PATH}>Authorize GitHub</Link></Button>
+                )}
+              </div>
+            </div>
+          )}
           {isLoadingPRs ? (
             <div className="flex flex-col items-center justify-center py-20 text-slate-500 gap-3">
               <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
               <p className="text-sm font-medium">Fetching pull requests from connected GitHub repositories...</p>
             </div>
-          ) : filteredPRs.length === 0 ? (
+          ) : filteredPRs.length === 0 && (livePRError || prIssues.length > 0) ? null : filteredPRs.length === 0 ? (
             <Card className="border-2 border-dashed border-slate-200 bg-white/70 p-5 text-center sm:p-12">
               <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-blue-600">
                 <GitPullRequest className="w-8 h-8" />
               </div>
               <h3 className="text-lg font-bold text-slate-900 mb-1">
-                {searchQuery || selectedRepoFilter !== "all"
+                {!livePRs?.repositories.length ? "Connect a repository" : searchQuery || selectedRepoFilter !== "all"
                   ? "No matching pull requests found"
                   : "No pull requests found"}
               </h3>
@@ -896,14 +932,16 @@ export default function ReviewPage() {
                 Connect your repositories or create a pull request on GitHub. You can also run an AI review manually by entering a PR number.
               </p>
               <div className="flex flex-wrap justify-center gap-3">
-                <Button
+                {!livePRs?.repositories.length ? (
+                  <Button size="sm" asChild><Link href="/dashboard/repositories">Open Repositories</Link></Button>
+                ) : <Button
                   variant="outline"
                   size="sm"
                   onClick={handleRefreshAll}
                   className="flex items-center gap-2"
                 >
                   <RefreshCw className="w-3.5 h-3.5" /> Sync Repositories
-                </Button>
+                </Button>}
                 <Button
                   size="sm"
                   onClick={() => setDialogOpen(true)}

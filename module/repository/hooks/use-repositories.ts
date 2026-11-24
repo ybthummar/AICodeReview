@@ -10,11 +10,11 @@ export class RepositoryFetchError extends Error {
   }
 }
 
-export function useRepositories() {
+export function useRepositories(search: string) {
   return useInfiniteQuery({
-    queryKey: ["repositories"],
+    queryKey: ["repositories", search],
     queryFn: async ({ pageParam }) => {
-      const result = await fetchRepositories(pageParam);
+      const result = await fetchRepositories(pageParam, 10, search);
       if (!result.ok) throw new RepositoryFetchError(result.code, result.message);
       return result;
     },

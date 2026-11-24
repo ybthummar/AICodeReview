@@ -23,11 +23,11 @@ import {
   GitBranch,
   RefreshCw,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { GITHUB_RECONNECT_PATH } from "@/module/auth/lib/github-sign-in";
 import { RepositoryFetchError, useRepositories } from "@/module/repository/hooks/use-repositories";
 import { useConnectRepository } from "@/module/repository/hooks/use-connect-repository";
-import type { Repository, RepositoryCardProps } from "@/types/repository/types";
+import type { Repository, RepositoryCardProps, RepositoryFetchIssue } from "@/types/repository/types";
 
 const RepositoryCardSkeleton = () => {
   return (
@@ -116,12 +116,12 @@ const RepositoryCard: React.FC<RepositoryCardProps> = ({
             )}
           </div>
 
-          <div>
+          {repo.stargazers_count !== null && (
             <span className="flex items-center text-gray-600 text-xs font-medium">
               <Star className="w-4 h-4 mr-1 text-blue-500 fill-blue-500" />
               {repo.stargazers_count.toLocaleString()}
             </span>
-          </div>
+          )}
         </div>
 
         {repo.topics && repo.topics.length > 0 && (
@@ -172,16 +172,16 @@ const RepositoryCard: React.FC<RepositoryCardProps> = ({
 };
 
 function RepositoryLoadRecovery({ error, retry, loading }: {
-  error: Error | null;
+  error?: RepositoryFetchIssue | null;
   retry: () => void;
   loading: boolean;
 }) {
-  const code = error instanceof RepositoryFetchError ? error.code : undefined;
+  const code = error?.code;
 
   return (
     <div className="space-y-3">
       <p role="alert" className="text-gray-600 text-sm leading-relaxed">
-        {error instanceof RepositoryFetchError ? error.message : "Could not load repositories right now. Please try again."}
+        {error?.message ?? "Could not load repositories right now. Please try again."}
       </p>
       {code === "github_auth_required" || code === "github_forbidden" ? (
         <Button asChild>
@@ -201,6 +201,14 @@ function RepositoryLoadRecovery({ error, retry, loading }: {
 }
 
 function RepositoryPage() {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [requestedSearch, setRequestedSearch] = useState("");
+  const searchTerm = searchQuery.trim().toLowerCase().slice(0, 200);
+  useEffect(() => {
+    const update = setTimeout(() => setRequestedSearch(searchTerm), 350);
+    return () => clearTimeout(update);
+  }, [searchTerm]);
+
   const {
     data,
     error,
@@ -213,11 +221,10 @@ function RepositoryPage() {
     isFetchNextPageError,
     refetch,
     isRefetching,
-  } = useRepositories();
+  } = useRepositories(requestedSearch);
 
   const { mutate: connectRepo } = useConnectRepository();
 
-  const [searchQuery, setSearchQuery] = useState("");
   const [localConnectingId, setLocalConnectingId] = useState<number | null>(
     null
   );
@@ -226,11 +233,10 @@ function RepositoryPage() {
     data?.pages.flatMap(({ repositories }) => repositories.map((repo) => [repo.id, repo] as const)),
   ).values());
   const needsRepoScope = data?.pages[0]?.needsRepoScope;
-  const searchTerm = searchQuery.trim().toLowerCase();
-
-  const filteredRepositories = allRepositories.filter(
-    (repo) => repo.full_name.toLowerCase().includes(searchTerm)
-  );
+  const restrictedOrganizationAccess = data?.pages.some((page) => page.restrictedOrganizationAccess);
+  const warning = data?.pages[0]?.warning;
+  const loadError = error instanceof RepositoryFetchError ? error : null;
+  const searching = searchTerm !== requestedSearch || isLoading;
 
   const handleRegister = async (repo: Repository) => {
     setLocalConnectingId(repo.id);
@@ -248,7 +254,7 @@ function RepositoryPage() {
     );
   };
 
-  if (isLoading && allRepositories.length === 0) {
+  if (isLoading && !searchTerm) {
     return (
       <div className="p-4 sm:p-6 lg:p-8 from-white via-blue-50 to-white min-h-screen">
         <div className="space-y-6 mb-8">
@@ -265,7 +271,7 @@ function RepositoryPage() {
     );
   }
 
-  if (isError && !data) {
+  if (isError && !data && !searchTerm && !requestedSearch) {
     return (
       <div className="p-4 sm:p-6 lg:p-8 from-white via-blue-50 to-white min-h-screen flex items-center justify-center">
         <Card className="max-w-md mx-auto shadow-lg p-8 bg-white border border-blue-100">
@@ -276,7 +282,7 @@ function RepositoryPage() {
             <h2 className="text-2xl font-semibold text-gray-900">
               Unable to Load Repositories
             </h2>
-            <RepositoryLoadRecovery error={error} retry={() => refetch()} loading={isFetching} />
+            <RepositoryLoadRecovery error={loadError} retry={() => refetch()} loading={isFetching} />
           </div>
         </Card>
       </div>
@@ -309,14 +315,28 @@ function RepositoryPage() {
         <div className="relative max-w-2xl">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-blue-400" />
           <Input
-            aria-label="Search loaded repositories"
-            placeholder={`Search ${allRepositories.length} loaded repositories...`}
+            aria-label="Search repositories"
+            placeholder="Search GitHub repositories..."
+            maxLength={200}
             className="pl-12 pr-4 py-2.5 text-base rounded-lg border border-blue-200 bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all placeholder:text-gray-500"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
       </div>
+
+      {warning && !searching && (
+        <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm">
+          <p className="mb-2 font-medium text-amber-900">Showing repositories saved in RepoPilot.</p>
+          <RepositoryLoadRecovery error={warning} retry={() => refetch()} loading={isFetching} />
+        </div>
+      )}
+
+      {restrictedOrganizationAccess && (
+        <p role="status" className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          GitHub limited access to some organization repositories. Authorize RepoPilot for your organization&apos;s SSO in GitHub settings.
+        </p>
+      )}
 
       {needsRepoScope && (
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-950">
@@ -329,8 +349,10 @@ function RepositoryPage() {
 
       {/* Repository Grid */}
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {filteredRepositories.length > 0 ? (
-          filteredRepositories.map((repo) => (
+        {searching ? (
+          <p role="status" className="col-span-full py-12 text-center text-sm text-gray-600">Searching repositories…</p>
+        ) : allRepositories.length > 0 ? (
+          allRepositories.map((repo) => (
             <RepositoryCard
               key={repo.id}
               repo={repo}
@@ -338,17 +360,17 @@ function RepositoryPage() {
               connectingId={localConnectingId}
             />
           ))
-        ) : (
+        ) : !isError && (
           <div className="col-span-full text-center py-20">
             <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
               <Search className="w-10 h-10 text-blue-400" />
             </div>
             <p className="text-xl font-semibold text-gray-900 mb-2">
-              {searchTerm ? "No matching repositories loaded" : "No repositories yet"}
+              {searchTerm ? "No matching repositories" : "No repositories yet"}
             </p>
             <p className="text-gray-600 text-sm">
               {searchTerm
-                ? hasNextPage ? "Load more repositories or try a different search." : "Try a different search."
+                ? "Try a different search."
                 : "GitHub returned no repositories for this account."}
             </p>
           </div>
@@ -356,15 +378,15 @@ function RepositoryPage() {
       </div>
 
       <div className="mt-12 flex flex-col items-center gap-4 text-center">
-        {isError && (
+        {!searching && isError && (
           <RepositoryLoadRecovery
-            error={error}
+            error={loadError}
             retry={() => isFetchNextPageError ? fetchNextPage() : refetch()}
             loading={isFetching}
           />
         )}
 
-        {hasNextPage && !isError && (
+        {!searching && hasNextPage && !isError && (
           <Button
             onClick={() => fetchNextPage()}
             disabled={isFetching}
@@ -381,7 +403,7 @@ function RepositoryPage() {
           </Button>
         )}
 
-        {!hasNextPage && !isError && allRepositories.length > 0 && (
+        {!searching && !warning && !hasNextPage && !isError && allRepositories.length > 0 && (
           <p className="text-sm text-gray-400">All repositories loaded</p>
         )}
       </div>

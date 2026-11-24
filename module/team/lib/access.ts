@@ -1,5 +1,6 @@
 import prisma from "@/lib/db";
 import { ADMIN_EMAILS, isAdminUser } from "@/lib/admin";
+import { legacyAuth } from "@/lib/auth";
 import { getInstallationTokenForRepository } from "@/module/github/lib/app";
 import { hasRole, normalizeRole, type WorkspaceRole } from "@/module/team/lib/roles";
 
@@ -93,15 +94,31 @@ export async function requireRepositoryAccess(
   return access;
 }
 
-// Reviews, chat and tooling always use the GitHub token of whoever connected the repository.
+const refreshingGitHubTokens = new Map<string, Promise<string | null>>();
+
 export async function getGitHubTokenForUser(userId: string): Promise<string | null> {
   const account = await prisma.account.findFirst({
-    where: { userId, providerId: "github", accessToken: { not: null } },
+    where: { userId, providerId: "github", OR: [{ accessToken: { not: null } }, { refreshToken: { not: null } }] },
     orderBy: { updatedAt: "desc" },
-    select: { accessToken: true },
+    select: { id: true, accessToken: true, accessTokenExpiresAt: true, refreshToken: true, refreshTokenExpiresAt: true },
   });
 
-  return account?.accessToken?.trim() || null;
+  if (!account) return null;
+  const now = Date.now();
+  if (!account.accessTokenExpiresAt || account.accessTokenExpiresAt.getTime() > now) {
+    return account.accessToken?.trim() || null;
+  }
+  if (!account.refreshToken || (account.refreshTokenExpiresAt && account.refreshTokenExpiresAt.getTime() <= now)) return null;
+
+  const pending = refreshingGitHubTokens.get(account.id);
+  if (pending) return pending;
+
+  const refresh = legacyAuth.api.getAccessToken({ body: { providerId: "github", userId, accountId: account.id } })
+    .then(({ accessToken }) => accessToken?.trim() || null)
+    .catch(() => null)
+    .finally(() => refreshingGitHubTokens.delete(account.id));
+  refreshingGitHubTokens.set(account.id, refresh);
+  return refresh;
 }
 
 export async function requireRepositoryToken(
@@ -127,7 +144,7 @@ export async function resolveReviewToken(
   owner: string,
   repo: string,
 ): Promise<string | null> {
-  const installationToken = await getInstallationTokenForRepository(owner, repo);
+  const installationToken = await getInstallationTokenForRepository(owner, repo, "pull_requests");
   if (installationToken) return installationToken;
 
   const own = await getGitHubTokenForUser(repositoryOwnerId);

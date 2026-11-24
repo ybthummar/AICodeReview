@@ -5,7 +5,8 @@ import prisma from "@/lib/db";
 import { headers } from "next/headers";
 import { isAdminUser } from "@/lib/admin";
 import { fail, ok, type ActionResult } from "@/lib/action-result";
-import { getOpenPullRequests, GitHubPullRequest } from "@/module/github/lib/github";
+import type { GitHubPullRequest } from "@/module/github/lib/github";
+import { PullRequestLoadError, readRepositoryPullRequests } from "@/module/github/lib/pull-requests";
 import {
   applyFindingStatus,
   buildInsightsOverview,
@@ -51,6 +52,12 @@ export interface ConnectedRepoPR {
   reviewId?: string;
   reviewStatus?: string;
   canReview: boolean;
+}
+
+export interface ConnectedRepoPullRequests {
+  repositories: { id: string; fullName: string; canReview: boolean }[];
+  pullRequests: ConnectedRepoPR[];
+  issues: { repositoryId: string; fullName: string; message: string; reconnect: boolean }[];
 }
 
 async function requireSession() {
@@ -289,96 +296,87 @@ export async function applyFindingFix(
 
 export async function getConnectedReposPullRequests(
   scope: "mine" | "all" = "mine"
-): Promise<ConnectedRepoPR[]> {
-  const session = await requireSession();
-  const isAdmin = isAdminUser(session.user);
-
-  const repositories = await prisma.repository.findMany({
-    where: isAdmin && scope === "all" ? {} : accessibleRepositoryWhere(session.user.id),
-    include: {
-      user: {
-        include: {
-          accounts: {
-            where: { providerId: "github" },
-          },
-        },
+): Promise<ActionResult<ConnectedRepoPullRequests>> {
+  try {
+    const session = await requireSession();
+    const repositories = await prisma.repository.findMany({
+      where: isAdminUser(session.user) && scope === "all" ? {} : accessibleRepositoryWhere(session.user.id),
+      select: {
+        id: true, owner: true, name: true, fullName: true, userId: true,
+        reviews: { select: { id: true, prNumber: true, status: true }, orderBy: { updatedAt: "desc" } },
+        ...viewerMembershipInclude(session.user.id),
       },
-      reviews: true,
-      ...viewerMembershipInclude(session.user.id),
-    },
-  });
+      orderBy: { fullName: "asc" },
+    });
 
-  if (repositories.length === 0) {
-    return [];
-  }
-
-  const prs: ConnectedRepoPR[] = [];
-
-  await Promise.allSettled(
-    repositories.map(async (repo) => {
-      const token = await resolveReviewToken(repo.userId, repo.owner, repo.name);
-      if (!token) return;
-
-      const canReview = hasRole(roleForRepository(repo, session.user), "MEMBER");
-      const repoPRs = await getOpenPullRequests(token, repo.owner, repo.name, "all");
-
-      for (const pr of repoPRs) {
-        const matchingReview = repo.reviews.find((r) => r.prNumber === pr.number);
-        prs.push({
-          repositoryId: repo.id,
-          repoOwner: repo.owner,
-          repoName: repo.name,
-          repoFullName: repo.fullName,
-          number: pr.number,
-          title: pr.title,
-          body: pr.body,
-          state: pr.state,
-          htmlUrl: pr.html_url,
-          createdAt: pr.created_at,
-          author: pr.user.login,
-          authorAvatar: pr.user.avatar_url,
-          headRef: pr.head.ref,
-          baseRef: pr.base.ref,
-          hasReview: !!matchingReview,
-          reviewId: matchingReview?.id,
-          reviewStatus: matchingReview?.status,
-          canReview,
-        });
+    const data: ConnectedRepoPullRequests = { repositories: [], pullRequests: [], issues: [] };
+    const repositoriesPerBatch = 4;
+    for (let offset = 0; offset < repositories.length; offset += repositoriesPerBatch) {
+      const batch = await Promise.all(repositories.slice(offset, offset + repositoriesPerBatch).map(async (repo) => {
+        const canReview = hasRole(roleForRepository(repo, session.user), "MEMBER");
+        const repository = { id: repo.id, fullName: repo.fullName, canReview };
+        try {
+          const prs = await readRepositoryPullRequests(repo, session.user.id);
+          const reviewsByNumber = new Map<number, (typeof repo.reviews)[number]>();
+          for (const review of repo.reviews) {
+            if (!reviewsByNumber.has(review.prNumber)) reviewsByNumber.set(review.prNumber, review);
+          }
+          const pullRequests = prs.map((pr) => {
+            const review = reviewsByNumber.get(pr.number);
+            return {
+              repositoryId: repo.id, repoOwner: repo.owner, repoName: repo.name, repoFullName: repo.fullName,
+              number: pr.number, title: pr.title, body: pr.body, state: pr.state, htmlUrl: pr.html_url,
+              createdAt: pr.created_at, author: pr.user.login, authorAvatar: pr.user.avatar_url,
+              headRef: pr.head.ref, baseRef: pr.base.ref, hasReview: Boolean(review), reviewId: review?.id,
+              reviewStatus: review?.status, canReview,
+            };
+          });
+          return { repository, pullRequests };
+        } catch (error) {
+          return {
+            repository,
+            issue: {
+              repositoryId: repo.id, fullName: repo.fullName,
+              message: error instanceof PullRequestLoadError ? error.message : "Could not load pull requests for this repository.",
+              reconnect: error instanceof PullRequestLoadError && error.reconnect,
+            },
+          };
+        }
+      }));
+      for (const result of batch) {
+        data.repositories.push(result.repository);
+        if (result.issue) data.issues.push(result.issue);
+        if (result.pullRequests) data.pullRequests.push(...result.pullRequests);
       }
-    })
-  );
-
-  // Open PRs needing review first, then open reviewed PRs, then closed PRs
-  prs.sort((a, b) => {
-    if (a.state === "open" && b.state !== "open") return -1;
-    if (a.state !== "open" && b.state === "open") return 1;
-    if (a.state === "open" && b.state === "open") {
-      if (!a.hasReview && b.hasReview) return -1;
-      if (a.hasReview && !b.hasReview) return 1;
     }
-    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-  });
 
-  return prs;
+    data.pullRequests.sort((a, b) => {
+      if (a.state === "open" && b.state !== "open") return -1;
+      if (a.state !== "open" && b.state === "open") return 1;
+      if (a.state === "open" && b.state === "open" && a.hasReview !== b.hasReview) return a.hasReview ? 1 : -1;
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+
+    return ok(data);
+  } catch (error) {
+    console.error("[pull-requests] Could not load connected repositories", { type: error instanceof Error ? error.name : typeof error });
+    return fail(null, "Could not load connected repositories for pull requests. Refresh and try again.");
+  }
 }
 
 export async function getRepoPullRequests(
   owner: string,
   repo: string
-): Promise<GitHubPullRequest[]> {
-  const session = await requireSession();
-
-  const access = await findAccessibleRepository(session.user, { owner, name: repo });
-  if (!access) {
-    return [];
+): Promise<ActionResult<GitHubPullRequest[]>> {
+  try {
+    const session = await requireSession();
+    if (!owner || !repo) return fail(null, "Select a connected repository.");
+    const access = await findAccessibleRepository(session.user, { owner, name: repo });
+    if (!access) return fail(null, "Repository not found or you do not have permission to view it.");
+    return ok(await readRepositoryPullRequests(access.repository, session.user.id));
+  } catch (error) {
+    return fail(error instanceof PullRequestLoadError ? error : null, "Could not load pull requests. Try again.");
   }
-
-  const token = await resolveReviewToken(access.repository.userId, access.repository.owner, access.repository.name);
-  if (!token) {
-    return [];
-  }
-
-  return await getOpenPullRequests(token, access.repository.owner, access.repository.name, "all");
 }
 
 export async function triggerManualReview(

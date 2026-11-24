@@ -38,7 +38,7 @@ export async function getInstallationToken(installationId: number): Promise<stri
   return authentication.token;
 }
 
-async function findLinkedRepositoryInstallation(owner: string, repo: string): Promise<number | null> {
+async function findLinkedRepositoryInstallation(owner: string, repo: string, permission?: "pull_requests"): Promise<number | null> {
   if (!isGitHubAppConfigured()) return null;
 
   const linked = await prisma.gitHubInstallation.findFirst({
@@ -51,16 +51,18 @@ async function findLinkedRepositoryInstallation(owner: string, repo: string): Pr
     const { data } = await getApp().octokit.rest.apps.getRepoInstallation({
       owner, repo, request: { signal: AbortSignal.timeout(10_000) },
     });
-    return data.id === linked.installationId && !data.suspended_at ? data.id : null;
+    if (data.id !== linked.installationId || data.suspended_at) return null;
+    if (permission && !data.permissions[permission]) return null;
+    return data.id;
   } catch (error) {
     if (error instanceof RequestError && error.status === 404) return null;
     throw error;
   }
 }
 
-export async function getInstallationTokenForRepository(owner: string, repo: string): Promise<string | null> {
+export async function getInstallationTokenForRepository(owner: string, repo: string, permission?: "pull_requests"): Promise<string | null> {
   try {
-    const installationId = await findLinkedRepositoryInstallation(owner, repo);
+    const installationId = await findLinkedRepositoryInstallation(owner, repo, permission);
     return installationId === null ? null : await getInstallationToken(installationId);
   } catch (error) {
     console.warn("GitHub App token unavailable", { owner, repo, status: error instanceof RequestError ? error.status : undefined });
